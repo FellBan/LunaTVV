@@ -33,6 +33,7 @@ import { getVideoResolutionFromM3u8, processImageUrl } from '@/lib/utils';
 
 import EpisodeSelector from '@/components/EpisodeSelector';
 import PageLayout from '@/components/PageLayout';
+import NetDiskSearchResults from '@/components/NetDiskSearchResults';
 
 // 扩展 HTMLVideoElement 类型以支持 hls 属性
 declare global {
@@ -74,6 +75,12 @@ function PlayPageClient() {
   // bangumi详情状态
   const [bangumiDetails, setBangumiDetails] = useState<any>(null);
   const [loadingBangumiDetails, setLoadingBangumiDetails] = useState(false);
+
+  // 网盘搜索状态
+  const [netdiskResults, setNetdiskResults] = useState<{ [key: string]: any[] } | null>(null);
+  const [netdiskLoading, setNetdiskLoading] = useState(false);
+  const [netdiskError, setNetdiskError] = useState<string | null>(null);
+  const [netdiskTotal, setNetdiskTotal] = useState(0);
 
   // 跳过片头片尾配置
   const [skipConfig, setSkipConfig] = useState<{
@@ -234,6 +241,12 @@ function PlayPageClient() {
 
     loadMovieDetails();
   }, [videoDoubanId, loadingMovieDetails, movieDetails, loadingBangumiDetails, bangumiDetails]);
+
+  // 自动网盘搜索：当有视频标题时可以随时搜索
+  useEffect(() => {
+    // 移除自动搜索，改为用户点击按钮时触发
+    // 这样可以避免不必要的API调用
+  }, []);
 
   // 视频播放地址
   const [videoUrl, setVideoUrl] = useState('');
@@ -461,6 +474,34 @@ function PlayPageClient() {
       console.log('Failed to fetch bangumi details:', error);
     }
     return null;
+  };
+
+  // 网盘搜索函数
+  const handleNetDiskSearch = async (query: string) => {
+    if (!query.trim()) return;
+
+    setNetdiskLoading(true);
+    setNetdiskError(null);
+    setNetdiskResults(null);
+    setNetdiskTotal(0);
+
+    try {
+      const response = await fetch(`/api/netdisk/search?q=${encodeURIComponent(query.trim())}`);
+      const data = await response.json();
+
+      if (data.success) {
+        setNetdiskResults(data.data.merged_by_type || {});
+        setNetdiskTotal(data.data.total || 0);
+        console.log(`网盘搜索完成: "${query}" - ${data.data.total || 0} 个结果`);
+      } else {
+        setNetdiskError(data.error || '网盘搜索失败');
+      }
+    } catch (error: any) {
+      console.error('网盘搜索请求失败:', error);
+      setNetdiskError('网盘搜索请求失败，请稍后重试');
+    } finally {
+      setNetdiskLoading(false);
+    }
   };
 
   // 播放源优选函数（针对旧iPad做极端保守优化）
@@ -921,8 +962,8 @@ function PlayPageClient() {
           console.log('HLS实例已销毁');
         }
 
-        // 3. 销毁ArtPlayer实例
-        artPlayerRef.current.destroy();
+        // 3. 销毁ArtPlayer实例 (使用false参数避免DOM清理冲突)
+        artPlayerRef.current.destroy(false);
         artPlayerRef.current = null;
 
         console.log('播放器资源已清理');
@@ -1937,6 +1978,11 @@ function PlayPageClient() {
       cleanupPlayer();
     }
 
+    // 确保 DOM 容器完全清空，避免多实例冲突
+    if (artRef.current) {
+      artRef.current.innerHTML = '';
+    }
+
     try {
       // 创建新的播放器实例
       Artplayer.PLAYBACK_RATE = [0.5, 0.75, 1, 1.25, 1.5, 2, 3];
@@ -2063,7 +2109,7 @@ function PlayPageClient() {
                   ) {
                     artPlayerRef.current.video.hls.destroy();
                   }
-                  artPlayerRef.current.destroy();
+                  artPlayerRef.current.destroy(false);
                   artPlayerRef.current = null;
                 }
                 setBlockAdEnabled(newVal);
@@ -2293,7 +2339,7 @@ function PlayPageClient() {
                 visible: localStorage.getItem('danmaku_visible') !== 'false',
                 emitter: false,
                 maxLength: 50,
-                lockTime: 3,
+                lockTime: 2, // v5.2.0优化: 减少锁定时间，降低快进时的延迟
                 theme: 'dark' as const,
                 width: 300,
                 
@@ -2333,21 +2379,25 @@ function PlayPageClient() {
                   return {
                     ...baseConfig,
                     antiOverlap: true, // 开启防重叠
-                    synchronousPlayback: true, // 开启同步播放
+                    synchronousPlayback: true, // 保持弹幕与视频播放速度同步
+                    useWorker: true, // v5.2.0: 启用Web Worker优化
                   }
                 
                 case 'medium': // 中等性能设备 - 适度优化
                   return {
                     ...baseConfig,
                     antiOverlap: !isMobile, // 移动端关闭防重叠
-                    synchronousPlayback: false, // 关闭同步播放计算
+                    synchronousPlayback: true, // 保持同步播放以确保体验一致
+                    useWorker: true, // v5.2.0: 中等设备也启用Worker
                   }
                 
-                case 'low': // 低性能设备 - 激进优化
+                case 'low': // 低性能设备 - 平衡优化
                   return {
                     ...baseConfig,
                     antiOverlap: false, // 关闭复杂的防重叠算法
-                    synchronousPlayback: false, // 关闭同步播放
+                    synchronousPlayback: true, // 保持同步以确保体验，计算量不大
+                    useWorker: true, // 开启Worker减少主线程负担
+                    maxLength: 30, // v5.2.0优化: 减少弹幕数量是关键优化
                   }
               }
             }
@@ -2614,7 +2664,7 @@ function PlayPageClient() {
           }
         });
 
-        // 监听播放进度跳转，优化弹幕重置
+        // 监听播放进度跳转，优化弹幕重置（减少闪烁）
         artPlayerRef.current.on('seek', () => {
           if (artPlayerRef.current?.plugins?.artplayerPluginDanmuku) {
             // 清除之前的重置计时器
@@ -2622,27 +2672,37 @@ function PlayPageClient() {
               clearTimeout(seekResetTimeoutRef.current);
             }
             
-            // 延迟重置弹幕，避免拖拽过程中频繁重置
+            // 增加延迟并只在非拖拽状态下重置，减少快进时的闪烁
             seekResetTimeoutRef.current = setTimeout(() => {
-              if (!isDraggingProgressRef.current && artPlayerRef.current?.plugins?.artplayerPluginDanmuku) {
+              if (!isDraggingProgressRef.current && artPlayerRef.current?.plugins?.artplayerPluginDanmuku && !artPlayerRef.current.seeking) {
                 artPlayerRef.current.plugins.artplayerPluginDanmuku.reset();
                 console.log('进度跳转，弹幕已重置');
               }
-            }, 200); // 200ms延迟
+            }, 500); // 增加到500ms延迟，减少频繁重置导致的闪烁
           }
         });
 
-        // 监听拖拽状态
+        // 监听拖拽状态 - v5.2.0优化: 在拖拽期间暂停弹幕更新以减少闪烁
         artPlayerRef.current.on('video:seeking', () => {
           isDraggingProgressRef.current = true;
+          // v5.2.0新增: 拖拽时暂停弹幕动画，减少CPU占用和闪烁
+          if (artPlayerRef.current?.plugins?.artplayerPluginDanmuku) {
+            artPlayerRef.current.plugins.artplayerPluginDanmuku.stop();
+          }
         });
 
         artPlayerRef.current.on('video:seeked', () => {
           isDraggingProgressRef.current = false;
-          // 拖拽结束后再重置弹幕
+          // v5.2.0优化: 拖拽结束后恢复弹幕播放并重置位置
           if (artPlayerRef.current?.plugins?.artplayerPluginDanmuku) {
-            artPlayerRef.current.plugins.artplayerPluginDanmuku.reset();
-            console.log('拖拽结束，弹幕已重置');
+            artPlayerRef.current.plugins.artplayerPluginDanmuku.start(); // 先恢复播放
+            setTimeout(() => {
+              // 延迟重置以确保播放状态稳定
+              if (artPlayerRef.current?.plugins?.artplayerPluginDanmuku) {
+                artPlayerRef.current.plugins.artplayerPluginDanmuku.reset();
+                console.log('拖拽结束，弹幕已重置');
+              }
+            }, 100);
           }
         });
 
@@ -3163,6 +3223,39 @@ function PlayPageClient() {
                 >
                   <FavoriteIcon filled={favorited} />
                 </button>
+                
+                {/* 网盘资源提示按钮 */}
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    // 触发网盘搜索（如果还没搜索过）
+                    if (!netdiskResults && !netdiskLoading && videoTitle) {
+                      handleNetDiskSearch(videoTitle);
+                    }
+                    // 滚动到网盘区域
+                    setTimeout(() => {
+                      const element = document.getElementById('netdisk-section');
+                      if (element) {
+                        element.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                      }
+                    }, 100);
+                  }}
+                  className='ml-3 flex-shrink-0 hover:opacity-90 transition-all duration-200 hover:scale-105'
+                >
+                  <div className='flex items-center gap-1.5 bg-blue-500 hover:bg-blue-600 text-white px-3 py-1.5 rounded-full text-sm font-medium shadow-md'>
+                    📁
+                    {netdiskLoading ? (
+                      <span className='flex items-center gap-1'>
+                        <span className='inline-block h-3 w-3 border-2 border-white border-t-transparent rounded-full animate-spin'></span>
+                        搜索中...
+                      </span>
+                    ) : netdiskTotal > 0 ? (
+                      <span>{netdiskTotal}个网盘资源</span>
+                    ) : (
+                      <span>网盘资源</span>
+                    )}
+                  </div>
+                </button>
               </h1>
 
               {/* 关键信息行 */}
@@ -3386,6 +3479,44 @@ function PlayPageClient() {
                   {bangumiDetails?.summary || detail?.desc}
                 </div>
               )}
+              
+              {/* 网盘资源区域 */}
+              <div id="netdisk-section" className='mt-6'>
+                <div className='border-t border-gray-200 dark:border-gray-700 pt-6'>
+                  <div className='mb-4'>
+                    <h3 className='text-xl font-semibold text-gray-800 dark:text-gray-200 flex items-center gap-2'>
+                      📁 网盘资源
+                      {netdiskLoading && (
+                        <span className='inline-block align-middle'>
+                          <span className='inline-block h-4 w-4 border-2 border-gray-300 border-t-blue-500 rounded-full animate-spin'></span>
+                        </span>
+                      )}
+                      {netdiskTotal > 0 && (
+                        <span className='inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300'>
+                          {netdiskTotal} 个资源
+                        </span>
+                      )}
+                    </h3>
+                    {videoTitle && !netdiskLoading && !netdiskResults && (
+                      <p className='text-sm text-gray-500 dark:text-gray-400 mt-2'>
+                        点击上方"📁 网盘资源"按钮开始搜索
+                      </p>
+                    )}
+                    {videoTitle && !netdiskLoading && (netdiskResults || netdiskError) && (
+                      <p className='text-sm text-gray-500 dark:text-gray-400 mt-2'>
+                        搜索关键词：{videoTitle}
+                      </p>
+                    )}
+                  </div>
+                  
+                  <NetDiskSearchResults
+                    results={netdiskResults}
+                    loading={netdiskLoading}
+                    error={netdiskError}
+                    total={netdiskTotal}
+                  />
+                </div>
+              </div>
             </div>
           </div>
 
