@@ -5,7 +5,7 @@
 import { Suspense, useEffect, useRef, useState } from 'react';
 
 import Hls from 'hls.js';
-import { Heart } from 'lucide-react';
+import { Heart, ChevronUp } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
 
 import EpisodeSelector from '@/components/EpisodeSelector';
@@ -66,6 +66,9 @@ function PlayPageClient() {
   // 豆瓣详情状态
   const [movieDetails, setMovieDetails] = useState<any>(null);
   const [loadingMovieDetails, setLoadingMovieDetails] = useState(false);
+
+  // 返回顶部按钮显示状态
+  const [showBackToTop, setShowBackToTop] = useState(false);
 
   // bangumi详情状态
   const [bangumiDetails, setBangumiDetails] = useState<any>(null);
@@ -557,15 +560,15 @@ function PlayPageClient() {
   ): Promise<SearchResult> => {
     if (sources.length === 1) return sources[0];
 
-    // 检测是否为iPad（所有浏览器都可能崩溃）
-    const userAgent = typeof navigator !== 'undefined' ? navigator.userAgent : '';
-    const isIPad = /iPad/i.test(userAgent);
-    const isIOS = /iPad|iPhone|iPod/i.test(userAgent);
-    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(userAgent) || isIOS;
+    // 使用全局统一的设备检测结果
+    const isIPad = /iPad/i.test(userAgent) || (userAgent.includes('Macintosh') && navigator.maxTouchPoints >= 1);
+    const isIOS = isIOSGlobal;
+    const isIOS13 = isIOS13Global;
+    const isMobile = isMobileGlobal;
 
-    // 如果是iPad，使用极简策略避免崩溃
-    if (isIPad) {
-      console.log('检测到iPad，使用无测速优选策略避免崩溃');
+    // 如果是iPad或iOS13+（包括新iPad在桌面模式下），使用极简策略避免崩溃
+    if (isIOS13) {
+      console.log('检测到iPad/iOS13+设备，使用无测速优选策略避免崩溃');
       
       // 简单的源名称优先级排序，不进行实际测速
       const sourcePreference = [
@@ -592,7 +595,7 @@ function PlayPageClient() {
         return 0;
       });
       
-      console.log('iPad优选结果:', sortedSources.map(s => s.source_name));
+      console.log('iPad/iOS13+优选结果:', sortedSources.map(s => s.source_name));
       return sortedSources[0];
     }
 
@@ -894,10 +897,11 @@ function PlayPageClient() {
     }
   };
 
-  // 检测移动设备（在组件层级定义）
+  // 检测移动设备（在组件层级定义）- 参考ArtPlayer compatibility.js
   const userAgent = typeof navigator !== 'undefined' ? navigator.userAgent : '';
   const isIOSGlobal = /iPad|iPhone|iPod/i.test(userAgent) && !(window as any).MSStream;
-  const isMobileGlobal = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(userAgent) || isIOSGlobal;
+  const isIOS13Global = isIOSGlobal || (userAgent.includes('Macintosh') && navigator.maxTouchPoints >= 1);
+  const isMobileGlobal = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(userAgent) || isIOS13Global;
 
   // 内存压力检测和清理（针对移动设备）
   const checkMemoryPressure = async () => {
@@ -1970,11 +1974,11 @@ function PlayPageClient() {
     }
     console.log(videoUrl);
 
-    // 检测移动设备和浏览器类型
-    const userAgent = typeof navigator !== 'undefined' ? navigator.userAgent : '';
+    // 检测移动设备和浏览器类型 - 使用统一的全局检测结果
     const isSafari = /^(?:(?!chrome|android).)*safari/i.test(userAgent);
-    const isIOS = /iPad|iPhone|iPod/i.test(userAgent) && !(window as any).MSStream;
-    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(userAgent) || isIOS;
+    const isIOS = isIOSGlobal;
+    const isIOS13 = isIOS13Global;
+    const isMobile = isMobileGlobal;
     const isWebKit = isSafari || isIOS;
     // Chrome浏览器检测 - 只有真正的Chrome才支持Chromecast
     // 排除各种厂商浏览器，即使它们的UA包含Chrome字样
@@ -2084,7 +2088,8 @@ function PlayPageClient() {
         poster: videoCover,
         volume: 0.7,
         isLive: false,
-        muted: false,
+        // iOS设备需要静音才能自动播放，参考ArtPlayer源码处理
+        muted: isIOS || isSafari,
         autoplay: true,
         pip: true,
         autoSize: false,
@@ -2125,25 +2130,69 @@ function PlayPageClient() {
             if (video.hls) {
               video.hls.destroy();
             }
+            
+            // 在函数内部重新检测iOS13+设备
+            const localIsIOS13 = isIOS13;
+            
+            // 🚀 根据 HLS.js 官方源码的最佳实践配置
             const hls = new Hls({
               debug: false,
               enableWorker: true,
-              lowLatencyMode: !isMobile, // 移动设备关闭低延迟模式以节省资源
-
-              /* 缓冲/内存相关 - 移动设备优化 */
-              maxBufferLength: isMobile ? (isIOS ? 8 : 12) : 30, // iOS更保守的缓冲
-              backBufferLength: isMobile ? (isIOS ? 5 : 8) : 30, // 减少已播放内容缓存
-              maxBufferSize: isMobile 
-                ? (isIOS ? 15 * 1000 * 1000 : 25 * 1000 * 1000) // iOS: 15MB, Android: 25MB
-                : 60 * 1000 * 1000, // 桌面: 60MB
-
-              /* 网络优化 */
-              maxLoadingDelay: isMobile ? 2 : 4, // 移动设备更快的加载超时
-              maxBufferHole: isMobile ? 0.3 : 0.5, // 减少缓冲洞
+              // 参考 HLS.js config.ts：移动设备关闭低延迟模式以节省资源
+              lowLatencyMode: !isMobile,
               
-              /* Fragment管理 */
-              liveDurationInfinity: false, // 避免无限缓冲
-              liveBackBufferLength: isMobile ? 3 : 10, // 减少直播回放缓冲
+              // 🎯 官方推荐的缓冲策略 - iOS13+ 特别优化
+              /* 缓冲长度配置 - 参考 hlsDefaultConfig */
+              maxBufferLength: isMobile 
+                ? (localIsIOS13 ? 8 : isIOS ? 10 : 15)  // iOS13+: 8s, iOS: 10s, Android: 15s
+                : 30, // 桌面默认30s
+              backBufferLength: isMobile 
+                ? (localIsIOS13 ? 5 : isIOS ? 8 : 10)   // iOS13+更保守
+                : Infinity, // 桌面使用无限回退缓冲
+
+              /* 缓冲大小配置 - 基于官方 maxBufferSize */
+              maxBufferSize: isMobile 
+                ? (localIsIOS13 ? 20 * 1000 * 1000 : isIOS ? 30 * 1000 * 1000 : 40 * 1000 * 1000) // iOS13+: 20MB, iOS: 30MB, Android: 40MB
+                : 60 * 1000 * 1000, // 桌面: 60MB (官方默认)
+
+              /* 网络加载优化 - 参考 defaultLoadPolicy */
+              maxLoadingDelay: isMobile ? (localIsIOS13 ? 2 : 3) : 4, // iOS13+设备更快超时
+              maxBufferHole: isMobile ? (localIsIOS13 ? 0.05 : 0.1) : 0.1, // 减少缓冲洞容忍度
+              
+              /* Fragment管理 - 参考官方配置 */
+              liveDurationInfinity: false, // 避免无限缓冲 (官方默认false)
+              liveBackBufferLength: isMobile ? (localIsIOS13 ? 3 : 5) : null, // 已废弃，保持兼容
+
+              /* 高级优化配置 - 参考 StreamControllerConfig */
+              maxMaxBufferLength: isMobile ? (localIsIOS13 ? 60 : 120) : 600, // 最大缓冲长度限制
+              maxFragLookUpTolerance: isMobile ? 0.1 : 0.25, // 片段查找容忍度
+              
+              /* ABR优化 - 参考 ABRControllerConfig */
+              abrEwmaFastLive: isMobile ? 2 : 3, // 移动端更快的码率切换
+              abrEwmaSlowLive: isMobile ? 6 : 9,
+              abrBandWidthFactor: isMobile ? 0.8 : 0.95, // 移动端更保守的带宽估计
+              
+              /* 启动优化 */
+              startFragPrefetch: !isMobile, // 移动端关闭预取以节省资源
+              testBandwidth: !localIsIOS13, // iOS13+关闭带宽测试以快速启动
+              
+              /* Loader配置 - 参考官方 fragLoadPolicy */
+              fragLoadPolicy: {
+                default: {
+                  maxTimeToFirstByteMs: isMobile ? 6000 : 10000,
+                  maxLoadTimeMs: isMobile ? 60000 : 120000,
+                  timeoutRetry: {
+                    maxNumRetry: isMobile ? 2 : 4,
+                    retryDelayMs: 0,
+                    maxRetryDelayMs: 0,
+                  },
+                  errorRetry: {
+                    maxNumRetry: isMobile ? 3 : 6,
+                    retryDelayMs: 1000,
+                    maxRetryDelayMs: isMobile ? 4000 : 8000,
+                  },
+                },
+              },
 
               /* 自定义loader */
               loader: blockAdEnabledRef.current
@@ -2540,6 +2589,26 @@ function PlayPageClient() {
       artPlayerRef.current.on('ready', async () => {
         setError(null);
 
+        // iOS设备自动播放优化：如果是静音启动的，在开始播放后恢复音量
+        if ((isIOS || isSafari) && artPlayerRef.current.muted) {
+          console.log('iOS设备静音自动播放，准备在播放开始后恢复音量');
+          
+          const handleFirstPlay = () => {
+            setTimeout(() => {
+              if (artPlayerRef.current && artPlayerRef.current.muted) {
+                artPlayerRef.current.muted = false;
+                artPlayerRef.current.volume = lastVolumeRef.current || 0.7;
+                console.log('iOS设备已恢复音量:', artPlayerRef.current.volume);
+              }
+            }, 500); // 延迟500ms确保播放稳定
+            
+            // 只执行一次
+            artPlayerRef.current.off('video:play', handleFirstPlay);
+          };
+          
+          artPlayerRef.current.on('video:play', handleFirstPlay);
+        }
+
         // 添加弹幕插件按钮选择性隐藏CSS
         const optimizeDanmukuControlsCSS = () => {
           if (document.getElementById('danmuku-controls-optimize')) return;
@@ -2773,23 +2842,33 @@ function PlayPageClient() {
         artPlayerRef.current.on('video:seeking', () => {
           isDraggingProgressRef.current = true;
           // v5.2.0新增: 拖拽时隐藏弹幕，减少CPU占用和闪烁
-          if (artPlayerRef.current?.plugins?.artplayerPluginDanmuku && !artPlayerRef.current.plugins.artplayerPluginDanmuku.isHide) {
+          // 只有在外部弹幕开启且当前显示时才隐藏
+          if (artPlayerRef.current?.plugins?.artplayerPluginDanmuku && 
+              externalDanmuEnabledRef.current && 
+              !artPlayerRef.current.plugins.artplayerPluginDanmuku.isHide) {
             artPlayerRef.current.plugins.artplayerPluginDanmuku.hide();
           }
         });
 
         artPlayerRef.current.on('video:seeked', () => {
           isDraggingProgressRef.current = false;
-          // v5.2.0优化: 拖拽结束后恢复弹幕显示并重置位置
+          // v5.2.0优化: 拖拽结束后根据外部弹幕开关状态决定是否恢复弹幕显示
           if (artPlayerRef.current?.plugins?.artplayerPluginDanmuku) {
-            artPlayerRef.current.plugins.artplayerPluginDanmuku.show(); // 先恢复显示
-            setTimeout(() => {
-              // 延迟重置以确保播放状态稳定
-              if (artPlayerRef.current?.plugins?.artplayerPluginDanmuku) {
-                artPlayerRef.current.plugins.artplayerPluginDanmuku.reset();
-                console.log('拖拽结束，弹幕已重置');
-              }
-            }, 100);
+            // 只有在外部弹幕开启时才恢复显示
+            if (externalDanmuEnabledRef.current) {
+              artPlayerRef.current.plugins.artplayerPluginDanmuku.show(); // 先恢复显示
+              setTimeout(() => {
+                // 延迟重置以确保播放状态稳定
+                if (artPlayerRef.current?.plugins?.artplayerPluginDanmuku) {
+                  artPlayerRef.current.plugins.artplayerPluginDanmuku.reset();
+                  console.log('拖拽结束，弹幕已重置');
+                }
+              }, 100);
+            } else {
+              // 外部弹幕关闭时，确保保持隐藏状态
+              artPlayerRef.current.plugins.artplayerPluginDanmuku.hide();
+              console.log('拖拽结束，外部弹幕已关闭，保持隐藏状态');
+            }
           }
         });
 
@@ -2858,6 +2937,94 @@ function PlayPageClient() {
           }
         }
         resumeTimeRef.current = null;
+
+        // iOS设备自动播放回退机制：如果自动播放失败，尝试用户交互触发播放
+        if ((isIOS || isSafari) && artPlayerRef.current.paused) {
+          console.log('iOS设备检测到视频未自动播放，准备交互触发机制');
+          
+          const tryAutoPlay = async () => {
+            try {
+              // 多重尝试策略
+              let playAttempts = 0;
+              const maxAttempts = 3;
+              
+              const attemptPlay = async (): Promise<boolean> => {
+                playAttempts++;
+                console.log(`iOS自动播放尝试 ${playAttempts}/${maxAttempts}`);
+                
+                try {
+                  await artPlayerRef.current.play();
+                  console.log('iOS设备自动播放成功');
+                  return true;
+                } catch (playError: any) {
+                  console.log(`播放尝试 ${playAttempts} 失败:`, playError.name);
+                  
+                  // 根据错误类型采用不同策略
+                  if (playError.name === 'NotAllowedError') {
+                    // 用户交互需求错误 - 最常见
+                    if (playAttempts < maxAttempts) {
+                      // 尝试降低音量再播放
+                      artPlayerRef.current.volume = 0.1;
+                      await new Promise(resolve => setTimeout(resolve, 200));
+                      return attemptPlay();
+                    }
+                    return false;
+                  } else if (playError.name === 'AbortError') {
+                    // 播放被中断 - 等待后重试
+                    if (playAttempts < maxAttempts) {
+                      await new Promise(resolve => setTimeout(resolve, 500));
+                      return attemptPlay();
+                    }
+                    return false;
+                  }
+                  return false;
+                }
+              };
+              
+              const success = await attemptPlay();
+              
+              if (!success) {
+                console.log('iOS设备需要用户交互才能播放，这是正常的浏览器行为');
+                // 显示友好的播放提示
+                if (artPlayerRef.current) {
+                  artPlayerRef.current.notice.show = '轻触播放按钮开始观看';
+                  
+                  // 添加一次性点击监听器用于首次播放
+                  let hasHandledFirstInteraction = false;
+                  const handleFirstUserInteraction = async () => {
+                    if (hasHandledFirstInteraction) return;
+                    hasHandledFirstInteraction = true;
+                    
+                    try {
+                      await artPlayerRef.current.play();
+                      // 首次成功播放后恢复正常音量
+                      setTimeout(() => {
+                        if (artPlayerRef.current && !artPlayerRef.current.muted) {
+                          artPlayerRef.current.volume = lastVolumeRef.current || 0.7;
+                        }
+                      }, 1000);
+                    } catch (error) {
+                      console.warn('用户交互播放失败:', error);
+                    }
+                    
+                    // 移除监听器
+                    artPlayerRef.current?.off('video:play', handleFirstUserInteraction);
+                    document.removeEventListener('click', handleFirstUserInteraction);
+                  };
+                  
+                  // 监听播放事件和点击事件
+                  artPlayerRef.current.on('video:play', handleFirstUserInteraction);
+                  document.addEventListener('click', handleFirstUserInteraction);
+                }
+              }
+            } catch (error) {
+              console.warn('自动播放回退机制执行失败:', error);
+            }
+          };
+          
+          // 延迟尝试，避免与进度恢复冲突
+          setTimeout(tryAutoPlay, 200);
+        }
 
         setTimeout(() => {
           if (
@@ -3020,6 +3187,58 @@ function PlayPageClient() {
       cleanupPlayer();
     };
   }, []);
+
+  // 返回顶部功能相关
+  useEffect(() => {
+    // 获取滚动位置的函数 - 专门针对 body 滚动
+    const getScrollTop = () => {
+      return document.body.scrollTop || 0;
+    };
+
+    // 使用 requestAnimationFrame 持续检测滚动位置
+    let isRunning = false;
+    const checkScrollPosition = () => {
+      if (!isRunning) return;
+
+      const scrollTop = getScrollTop();
+      const shouldShow = scrollTop > 300;
+      setShowBackToTop(shouldShow);
+
+      requestAnimationFrame(checkScrollPosition);
+    };
+
+    // 启动持续检测
+    isRunning = true;
+    checkScrollPosition();
+
+    // 监听 body 元素的滚动事件
+    const handleScroll = () => {
+      const scrollTop = getScrollTop();
+      setShowBackToTop(scrollTop > 300);
+    };
+
+    document.body.addEventListener('scroll', handleScroll, { passive: true });
+
+    return () => {
+      isRunning = false; // 停止 requestAnimationFrame 循环
+      // 移除 body 滚动事件监听器
+      document.body.removeEventListener('scroll', handleScroll);
+    };
+  }, []);
+
+  // 返回顶部功能
+  const scrollToTop = () => {
+    try {
+      // 根据调试结果，真正的滚动容器是 document.body
+      document.body.scrollTo({
+        top: 0,
+        behavior: 'smooth',
+      });
+    } catch (error) {
+      // 如果平滑滚动完全失败，使用立即滚动
+      document.body.scrollTop = 0;
+    }
+  };
 
   if (loading) {
     return (
@@ -3681,6 +3900,19 @@ function PlayPageClient() {
           </div>
         </div>
       </div>
+
+      {/* 返回顶部悬浮按钮 */}
+      <button
+        onClick={scrollToTop}
+        className={`fixed bottom-20 md:bottom-6 right-6 z-[500] w-12 h-12 bg-green-500/90 hover:bg-green-500 text-white rounded-full shadow-lg backdrop-blur-sm transition-all duration-300 ease-in-out flex items-center justify-center group ${
+          showBackToTop
+            ? 'opacity-100 translate-y-0 pointer-events-auto'
+            : 'opacity-0 translate-y-4 pointer-events-none'
+        }`}
+        aria-label='返回顶部'
+      >
+        <ChevronUp className='w-6 h-6 transition-transform group-hover:scale-110' />
+      </button>
     </PageLayout>
   );
 }
