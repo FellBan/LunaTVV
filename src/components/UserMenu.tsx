@@ -764,6 +764,8 @@ export const UserMenu: React.FC = () => {
     setEnableAutoSkip(value);
     if (typeof window !== 'undefined') {
       localStorage.setItem('enableAutoSkip', JSON.stringify(value));
+      // 🔑 通知 SkipController localStorage 已更新
+      window.dispatchEvent(new Event('localStorageChanged'));
     }
   };
 
@@ -771,6 +773,8 @@ export const UserMenu: React.FC = () => {
     setEnableAutoNextEpisode(value);
     if (typeof window !== 'undefined') {
       localStorage.setItem('enableAutoNextEpisode', JSON.stringify(value));
+      // 🔑 通知 SkipController localStorage 已更新
+      window.dispatchEvent(new Event('localStorageChanged'));
     }
   };
 
@@ -1837,22 +1841,24 @@ export const UserMenu: React.FC = () => {
                   {watchingUpdates.updatedSeries
                     .filter(series => series.hasNewEpisode)
                     .map((series, index) => (
-                      <div key={`new-${series.title}_${series.year}_${index}`} className='relative'>
-                        <VideoCard
-                          title={series.title}
-                          poster={series.cover}
-                          year={series.year}
-                          source={series.sourceKey}
-                          source_name={series.source_name}
-                          episodes={series.totalEpisodes}
-                          currentEpisode={series.currentEpisode}
-                          id={series.videoId}
-                          onDelete={undefined}
-                          type={series.totalEpisodes > 1 ? 'tv' : ''}
-                          from="playrecord"
-                        />
+                      <div key={`new-${series.title}_${series.year}_${index}`} className='relative group/card'>
+                        <div className='relative group-hover/card:z-[5] transition-all duration-300'>
+                          <VideoCard
+                            title={series.title}
+                            poster={series.cover}
+                            year={series.year}
+                            source={series.sourceKey}
+                            source_name={series.source_name}
+                            episodes={series.totalEpisodes}
+                            currentEpisode={series.currentEpisode}
+                            id={series.videoId}
+                            onDelete={undefined}
+                            type={series.totalEpisodes > 1 ? 'tv' : ''}
+                            from="playrecord"
+                          />
+                        </div>
                         {/* 新集数徽章 */}
-                        <div className='absolute -top-2 -right-2 bg-gradient-to-r from-red-500 to-pink-500 text-white text-xs px-2 py-1 rounded-full shadow-lg z-50'>
+                        <div className='absolute -top-2 -right-2 bg-gradient-to-r from-red-500 to-pink-500 text-white text-xs px-2 py-1 rounded-full shadow-lg z-10'>
                           +{series.newEpisodes}集
                         </div>
                       </div>
@@ -1917,25 +1923,27 @@ export const UserMenu: React.FC = () => {
               const { source, id } = parseKey(record.key);
               const newEpisodesCount = getNewEpisodesCount(record);
               return (
-                <div key={record.key} className='relative'>
-                  <VideoCard
-                    id={id}
-                    title={record.title}
-                    poster={record.cover}
-                    year={record.year}
-                    source={source}
-                    source_name={record.source_name}
-                    progress={getProgress(record)}
-                    episodes={record.total_episodes}
-                    currentEpisode={record.index}
-                    query={record.search_title}
-                    from='playrecord'
-                    type={record.total_episodes > 1 ? 'tv' : ''}
-                    remarks={record.remarks}
-                  />
+                <div key={record.key} className='relative group/card'>
+                  <div className='relative group-hover/card:z-[5] transition-all duration-300'>
+                    <VideoCard
+                      id={id}
+                      title={record.title}
+                      poster={record.cover}
+                      year={record.year}
+                      source={source}
+                      source_name={record.source_name}
+                      progress={getProgress(record)}
+                      episodes={record.total_episodes}
+                      currentEpisode={record.index}
+                      query={record.search_title}
+                      from='playrecord'
+                      type={record.total_episodes > 1 ? 'tv' : ''}
+                      remarks={record.remarks}
+                    />
+                  </div>
                   {/* 新集数徽章 */}
                   {newEpisodesCount > 0 && (
-                    <div className='absolute -top-2 -right-2 bg-gradient-to-r from-red-500 to-pink-500 text-white text-xs px-2 py-1 rounded-full shadow-lg z-50'>
+                    <div className='absolute -top-2 -right-2 bg-gradient-to-r from-red-500 to-pink-500 text-white text-xs px-2 py-1 rounded-full shadow-lg z-10'>
                       +{newEpisodesCount}集
                     </div>
                   )}
@@ -2026,6 +2034,33 @@ export const UserMenu: React.FC = () => {
           <div className='grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4'>
             {favorites.map((favorite) => {
               const { source, id } = parseKey(favorite.key);
+
+              // 智能计算即将上映状态
+              let calculatedRemarks = favorite.remarks;
+              let isNewRelease = false;
+
+              if (favorite.releaseDate) {
+                const today = new Date();
+                today.setHours(0, 0, 0, 0);
+                const releaseDate = new Date(favorite.releaseDate);
+                const daysDiff = Math.ceil((releaseDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+
+                // 根据天数差异动态更新显示文字
+                if (daysDiff < 0) {
+                  const daysAgo = Math.abs(daysDiff);
+                  calculatedRemarks = `已上映${daysAgo}天`;
+                  // 7天内上映的标记为新上映
+                  if (daysAgo <= 7) {
+                    isNewRelease = true;
+                  }
+                } else if (daysDiff === 0) {
+                  calculatedRemarks = '今日上映';
+                  isNewRelease = true;
+                } else {
+                  calculatedRemarks = `${daysDiff}天后上映`;
+                }
+              }
+
               return (
                 <div key={favorite.key} className='relative'>
                   <VideoCard
@@ -2039,20 +2074,19 @@ export const UserMenu: React.FC = () => {
                     query={favorite.search_title}
                     from='favorite'
                     type={favorite.total_episodes > 1 ? 'tv' : ''}
+                    remarks={calculatedRemarks}
+                    releaseDate={favorite.releaseDate}
                   />
-                  {/* 收藏时间标签 */}
-                  <div className='absolute top-2 right-2 bg-black/50 rounded px-2 py-1'>
-                    <span className='text-xs text-white font-medium'>
-                      {new Date(favorite.save_time).toLocaleDateString('zh-CN', {
-                        month: 'short',
-                        day: 'numeric',
-                      })}
-                    </span>
-                  </div>
-                  {/* 收藏心形图标 */}
-                  <div className='absolute bottom-2 right-2'>
-                    <Heart className='w-4 h-4 text-red-500 fill-red-500' />
-                  </div>
+                  {/* 收藏心形图标 - 隐藏，使用VideoCard内部的hover爱心 */}
+                  {/* 新上映高亮标记 - 7天内上映的显示 */}
+                  {isNewRelease && (
+                    <div className='absolute top-2 left-2 bg-gradient-to-r from-yellow-400 via-orange-500 to-red-500 text-white text-xs font-bold px-3 py-1.5 rounded-full shadow-lg ring-2 ring-white/50 animate-pulse z-40'>
+                      <span className='flex items-center gap-1'>
+                        <span className='text-[10px]'>🎉</span>
+                        新上映
+                      </span>
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -2085,14 +2119,17 @@ export const UserMenu: React.FC = () => {
       <div className='relative'>
         <button
           onClick={handleMenuClick}
-          className='w-10 h-10 p-2 rounded-full flex items-center justify-center text-gray-600 hover:bg-gray-200/50 dark:text-gray-300 dark:hover:bg-gray-700/50 transition-colors'
+          className='relative w-10 h-10 p-2 rounded-full flex items-center justify-center text-gray-600 hover:text-blue-500 dark:text-gray-300 dark:hover:text-blue-400 transition-all duration-300 hover:scale-110 hover:shadow-lg hover:shadow-blue-500/30 dark:hover:shadow-blue-400/30 group'
           aria-label='User Menu'
         >
-          <User className='w-full h-full' />
+          {/* 微光背景效果 */}
+          <div className='absolute inset-0 rounded-full bg-gradient-to-br from-blue-400/0 to-purple-600/0 group-hover:from-blue-400/20 group-hover:to-purple-600/20 dark:group-hover:from-blue-300/20 dark:group-hover:to-purple-500/20 transition-all duration-300'></div>
+
+          <User className='w-full h-full relative z-10 group-hover:scale-110 transition-transform duration-300' />
         </button>
         {/* 统一更新提醒点：版本更新或剧集更新都显示橙色点 */}
         {((updateStatus === UpdateStatus.HAS_UPDATE) || (hasUnreadUpdates && totalUpdates > 0)) && (
-          <div className='absolute top-[2px] right-[2px] w-2 h-2 bg-yellow-500 rounded-full'></div>
+          <div className='absolute top-[2px] right-[2px] w-2 h-2 bg-yellow-500 rounded-full animate-pulse shadow-lg shadow-yellow-500/50'></div>
         )}
       </div>
 

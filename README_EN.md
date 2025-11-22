@@ -25,7 +25,7 @@
 ![HLS.js](https://img.shields.io/badge/HLS.js-1.6.13-ec407a)
 ![License](https://img.shields.io/badge/License-MIT-green)
 ![Docker Ready](https://img.shields.io/badge/Docker-ready-blue?logo=docker)
-![Version](https://img.shields.io/badge/Version-5.5.6-orange)
+![Version](https://img.shields.io/badge/Version-5.6.3-orange)
 
 </div>
 
@@ -33,7 +33,7 @@
 
 ## 📢 Project Overview
 
-This project is a deeply customized version based on **MoonTV**, continuously developed from **v4.3.1** to the current **v5.5.6**, with **50+ major feature modules** and **300+ detailed optimizations** added. See [CHANGELOG](CHANGELOG) for all new features.
+This project is a deeply customized version based on **MoonTV**, continuously developed from **v4.3.1** to the current **v5.6.3**, with **50+ major feature modules** and **300+ detailed optimizations** added. See [CHANGELOG](CHANGELOG) for all new features.
 
 ### 💡 Core Enhancement Highlights
 
@@ -48,7 +48,7 @@ This project is a deeply customized version based on **MoonTV**, continuously de
 - **AI Content Recommendations**: Support for GPT-5/o series models, dynamic prompt management
 - **Multiple Card Types**: Video recommendations, YouTube videos, video link parsing
 - **TMDB Actor Search**: Complete actor search, filtering, and caching
-- **Release Calendar**: Upcoming content preview and tracking
+- **Release Calendar & Upcoming Releases**: Upcoming content preview and tracking, support favoriting upcoming releases, automatically becomes playable after release
 
 #### 💬 Danmaku Ecosystem
 - **Third-party Danmaku API**: Integrated Tencent Video, iQiyi, Youku, Bilibili platforms, smart content matching prevents trailers
@@ -58,6 +58,7 @@ This project is a deeply customized version based on **MoonTV**, continuously de
 - **Web-exclusive Input**: Simple "Danmu" button for quick sending (auto-hidden on mobile)
 
 #### 📊 User Management Enhancement
+- **Telegram Magic Link Authentication**: Secure and convenient Telegram-based login with auto webhook configuration
 - **User Level System**: Replaces large login count numbers with friendly level display
 - **Playback Statistics**: Complete viewing data statistics, analysis, visualization, global/personal stats tab switching
 - **Dual Reminder System**: New episodes (red theme) and continue watching (blue theme) with gradient badges and halo effects
@@ -68,24 +69,34 @@ This project is a deeply customized version based on **MoonTV**, continuously de
 - **Chromecast Casting**: Smart browser detection, auto-excludes OPPO, Xiaomi, Huawei, Samsung vendor browsers
 - **iPad/iOS Optimization**: HLS.js official source optimization, smart device detection, multi-attempt autoplay strategy
 - **Skip Intro/Outro**: Real-time marking button, draggable floating config window, remaining time mode, position persistence
+- **Live DVR Detection**: Auto-detect DVR/timeshift support after player loads, display seekable time range, one-click enable progress bar mode
 - **Mobile Optimization**: Volume control hover optimization, responsive controller, danmaku config desktop-only display
 - **Episode Group Scrolling**: Playback page episode selection supports scroll pagination for smooth browsing
 
 #### 📱 Interface Experience Optimization
+- **Hero Banner Full Category Support**: Homepage auto-rotating hero banner supports all content types (movies, series, variety shows, short dramas, anime), gradient background design
+- **Modern Navigation UI**: Desktop horizontal top navbar, mobile Liquid Glass bottom navigation, responsive switching
+- **Mobile Banner Optimization**: Swipeable card-style layout with touch gesture navigation, better suited for mobile devices
+- **Mobile Layout Optimization**: Reduced header height, tighter layout design, fixed excessive spacing issues
 - **Virtual Scrolling**: react-window 2.2.0, smooth loading for massive content, smart container size detection (ResizeObserver)
 - **Virtual Scrolling Toggle**: Gradient styles, icons, animations, user switchable display modes
 - **Responsive Grid**: 2-8 column adaptive, auto-calculated optimal layout
-- **Douban Details Enhancement**: Complete rating, cast & crew, premiere date, duration, production info
+- **Douban Details Enhancement**: Complete rating, cast & crew, premiere date, duration, production info, poster proxy to prevent 403 errors
 - **User Menu Features**: Update reminders, continue watching (with new episode badges), favorites quick access, TVBox settings integration
 - **Login Interface Modernization**: Dynamic random wallpapers, gradient cards, responsive design
 - **Back to Top Button**: Quick return for long pages like release calendar
 
 #### 🔐 Security & Storage
 - **TVBox Complete Ecosystem**:
-  - IP whitelist, Token authentication, full API compatibility
+  - IP whitelist, user-specific Token authentication, full API compatibility, intelligent search proxy
+  - TVBox Intelligent Search Proxy with adult content filtering, path prefix support, UI controls
   - Deep JAR diagnostic system (file header verification, smart health check)
   - Spider management system (multi-Spider JAR backup sources, fallback proxy, gaotianliuyun third backup source)
   - Regular user access support (`/api/tvbox-config` endpoint)
+- **Adult Content Management**: Dual-layer filtering system, auto-detection, batch operations, user/group-level controls
+- **Video Source Import/Export**: Array/config file format export, backup & migration, quick copy buttons
+- **Source Browser & Testing Module**: Source testing, health checks, mobile responsive layout
+- **Resource Search API Authentication**: Enhanced security with user authentication
 - **Calendar Cache Migration**: Migrated from localStorage to database, cross-device sync support
 - **Cache Optimization**: Unified cache management (YouTube, cloud drive, Douban, danmaku)
 - **Enhanced Storage Modes**: Full Kvrocks/Redis/Upstash support, memory cache prevents QuotaExceededError
@@ -144,6 +155,7 @@ This project is licensed under **CC BY-NC-SA 4.0**, with the following terms:
 - ✅ EXT-X-MEDIA URI handling (prevents HLS audio track loading errors)
 
 ### 📊 User Management
+- ✅ Telegram Magic Link authentication (secure convenient login, auto webhook config)
 - ✅ User level system (replaces large login count numbers)
 - ✅ Playback statistics (watch time, video count, recent records, global/personal tab switching)
 - ✅ Dual reminder system (new episodes red theme, continue watching blue theme, gradient badges)
@@ -156,27 +168,38 @@ This project is licensed under **CC BY-NC-SA 4.0**, with the following terms:
 - ✅ Chromecast casting (smart browser detection, excludes vendor browsers)
 - ✅ iPad/iOS optimization (HLS.js official source optimization, smart device detection, multi-attempt autoplay retry)
 - ✅ Skip intro/outro (real-time marking button, draggable floating window, remaining time mode, cross-episode support)
+- ✅ Live DVR detection (auto-detect DVR/timeshift support after player loads, display seekable time range, one-click enable progress bar mode)
 - ✅ Danmaku config panel (desktop display, mobile hidden)
 - ✅ Volume control optimization (hover area optimization, precise detection)
 - ✅ Episode switching optimization (debounce, state management, correct playback time reset)
 - ✅ Episode group scroll pagination (smooth browsing for large episode counts)
 
 ### 🎨 Interface Experience
+- ✅ Hero banner (homepage auto-rotating, gradient backgrounds, enhanced visual appeal, full category support for all content types)
+- ✅ Modern navigation UI (desktop horizontal top bar, mobile Liquid Glass bottom nav, responsive switching)
+- ✅ Mobile banner optimization (swipeable card-style layout, touch gesture navigation, better mobile experience)
+- ✅ Mobile layout optimization (reduced header height, tighter layout, fixed excessive spacing)
 - ✅ Virtual scrolling (react-window 2.2.0, ResizeObserver smart detection, progressive loading)
 - ✅ Virtual scrolling toggle (gradient styles, icons, animations, user switchable)
 - ✅ Responsive grid (2-8 column adaptive, actual container width dynamic calculation)
-- ✅ Douban details enhancement (rating, cast & crew, premiere date, duration, production info)
+- ✅ Douban details enhancement (rating, cast & crew, premiere date, duration, production info, poster proxy to prevent 403)
 - ✅ User menu enhancement (update reminders, continue watching with new episode badges, favorites quick access, TVBox settings)
 - ✅ Login/register modernization (dynamic random wallpapers, gradient cards, responsive design)
 - ✅ Back to top button (long pages like release calendar)
 - ✅ Completed series badges (based on vod_remarks, search API priority)
 - ✅ Search result filtering (source, title, year filtering, year sorting)
 - ✅ Video card right-click/long-press menu (new tab play, favorites, etc.)
+- ✅ z-index hierarchy optimization (cards, badges, modals display correctly)
 
 ### 🔐 Security & Storage
-- ✅ TVBox complete ecosystem (IP whitelist, Token auth, full API compatibility, regular user access)
+- ✅ TVBox complete ecosystem (IP whitelist, user-specific Token auth, full API compatibility, intelligent search proxy)
+- ✅ TVBox intelligent search proxy (adult content filtering, path prefix support, UI controls)
+- ✅ Adult content management system (dual-layer filtering, auto-detection, batch operations, user/group-level controls)
+- ✅ Video source import/export (array/config file formats, backup & migration, quick copy buttons)
 - ✅ TVBox deep diagnostics (JAR file header verification, smart health check, config field display)
 - ✅ Spider management system (multi-JAR backup sources, fallback proxy, gaotianliuyun third backup source)
+- ✅ Source browser & testing module (source testing, health checks, mobile responsive)
+- ✅ Resource search API authentication (enhanced security)
 - ✅ Calendar cache database migration (cross-device sync)
 - ✅ Unified cache management system (YouTube, cloud drive, Douban, danmaku)
 - ✅ Kvrocks/Redis/Upstash storage (full compatibility handling)
@@ -441,7 +464,7 @@ When a new Docker image version is released, Zeabur won't automatically update. 
    - Click on the service you want to update (LunaTV or KVRocks)
 
 2. **Restart Service**
-   - Click the **"Restart"** button in the top right corner
+   - Click on the **"Overview"** page, and then click the **"Restart"** button
    - Zeabur will automatically pull the latest `latest` image and redeploy
 
 > 💡 **Tips**:
@@ -719,9 +742,15 @@ The admin panel provides the following feature modules (some features are owner-
 - **Video Source Management**:
   - Add video source (name, API address)
   - Batch enable/disable/delete
+  - Import/Export video sources (batch config management for backup and migration)
   - Video source validity detection
   - Drag-and-drop sorting
   - Edit/Delete individual sources
+- **Source Browser & Testing Module**:
+  - Browse and search source content
+  - Source testing and health checks
+  - Mobile responsive layout
+  - Side drawer test results display
 
 #### 📺 Live Source Configuration
 - **Live Source Management**:
@@ -856,36 +885,57 @@ This project works with [OrionTV](https://github.com/zimplexing/OrionTV) on Andr
 
 For complete feature updates and bug fixes, see [CHANGELOG](CHANGELOG).
 
-### Latest Version: v5.5.6 (2025-10-08)
+### Latest Version: v5.6.3 (2025-11-17)
 
 #### Added
-- 🎯 Skip intro/outro real-time marking button: Interactive button for real-time marking of intro/outro time points
-- 🎮 Draggable skip config floating window: Draggable floating window component with touch support and position persistence
-- 📱 Mobile skip settings button display: Fixed display issue on mobile devices
-- 🎬 Outro remaining time mode cross-episode support: Correct handling of remaining time mode when switching episodes
-- 📊 Continue watching card completion badges: Added completion badges for all continue watching sections
-- 🔍 TVBox deep JAR diagnostics: JAR file header verification and smart health check system
+- 🎉 Short Drama Multi-source Search: Enabled multi-source search for short drama content with detail integration triggered from banners and cards
+- 🎨 Enhanced Virtual Scrolling: Added auto-scroll and image preloading to improve browsing experience
+- 📊 Smart Distribution Algorithm: Implemented intelligent time distribution algorithm for upcoming releases section
 
 #### Improved
-- 📐 Draggable skip config window boundary limits: Optimized drag boundary limits and position persistence
-- 🎨 Zeabur deployment guide simplification: Simplified to Docker image only, removed complex GitHub integration
-- 📝 Zeabur deployment guide KVRocks config correction: Fixed persistence path from `/data` to `/var/lib/kvrocks/db`
-- 🌐 Zeabur one-click deployment template link update
-- 🏠 Zeabur post-deployment domain setup reminder: Added important reminder to set access domain after deployment
-- 📚 README anchor link fixes: Fixed anchor links in "Set Access Domain" section
+- 🔐 SessionTracker Compatibility Enhancement: Support both auth and user_auth cookies for improved session tracking stability
+- 📈 Release Calendar API Limit Increase: Increased from 20 to 100 to show more upcoming content
+- 🔍 Upcoming Time Range Extension: Extended from 30 to 90 days for longer-term content preview
+- 📅 Today's Release Hard Limit: Prevent today's releases from dominating the upcoming releases section
+- 📊 Upcoming Distribution Algorithm Improvement: Optimized distribution of upcoming release content
+- 📺 Channel Name Scrolling Animation: Added scrolling text animation for channel names in live view
 
 #### Fixed
-- 🔧 original_episodes corruption and infinite API request protection
-- 🛡️ Episode detection auto original_episodes update protection
-- 📝 Episode update detection original_episodes overwrite protection
-- 🎬 Outro skip remaining time mode cross-episode fixes (multiple optimizations)
-- 🔄 KVRocks skip config first load issue
-- 📊 Skip config architecture refactor: New skip config design for more stable intro/outro skip functionality
-- 🎯 Continue watching card flicker optimization: Prevent flicker by sorting updatedSeries
-- 🌐 Zeabur deployment guide and demo site updates
+- 🔧 Fixed rendering 0 from videoDoubanId check: Prevent incorrect display when Douban ID is 0
+- 🎯 Smart Source Filtering Implementation: Auto-filter zero values in class field and sources, as well as sources without episodes
+- 🚫 Filter Invalid Data: Clean zero values in class field and sources without episode counts
+- 📺 Update availableSources State: Ensure source selector only shows valid video sources
+- 🔝 Improve Fullscreen Button Visibility: Optimize fullscreen button display on small screens
+- 🎪 Hide Placeholder Episodes in Favorites: Avoid showing 99 episode placeholder for short dramas to prevent user confusion
+- 🚫 Prevent Short Drama Source Misassignment: Ensure short drama sources are not added to non-short drama content
+- 🎯 Fix VideoCard Badge Display: Support proper badge display for all release status types
+- ⏰ Resolve Date Comparison Timezone Issue: Fix timezone-related date judgment errors in upcoming releases filter
+- 🔗 Fix HeroBanner Play Link: Add stype parameter for correct navigation
+- 🎯 Fix HeroBanner Search Matching: Use douban_id instead of title matching for improved search accuracy
+- 🎬 Improve Short Film Title Search: Optimize fuzzy search algorithm accuracy for short film titles
+- 🔝 Fix Skip Button z-index: Prevent skip button from covering navigation bar
+- 📍 Fix Skip Button Positioning: Keep skip button at fixed position within player container
+- ❤️ Add Dedicated Favorite Heart Button: Add dedicated clickable heart button for favorites panel
+- 🎯 Hide Favorite Hover Buttons: Prevent floating heart button from interfering with user operations
+- 🗑️ Remove Duplicate Favorites Panel Elements: Clean duplicate heart and date labels in favorites panel
+- 🧹 Clean Released Content Play URLs: Ensure released upcoming content can play normally
+- 🏷️ Smart Source Tag System: Support dynamic status and color theme source tags
+- 🎨 Dynamic Release Badges: Display badges dynamically based on release status and hide placeholder episode counts
+- ▶️ Enable Released Favorite Playback: Smart detection of whether upcoming content has been released and enable playback
+- 🔄 Smart Deduplication and Dynamic Status: Optimize deduplication and status updates for upcoming releases
+- 🎯 Enhanced M3U8 Ad Filtering: Add SCTE-35 detection to improve ad filtering effectiveness
+- 🔧 Fix Subtitle Deduplication Logic: Improve title duplicate detection algorithm
+- 📊 Fix Card z-index Conflicts: Prevent all card components from covering navigation bar
+- 📱 Fix VideoCard Hover z-index: Resolve VideoCard covering navigation bar on hover/click
+- 🎯 Fix Tooltip z-index Conflicts: Ensure VideoCard tooltips don't conflict with navigation bar
+- 🔧 Fix Short Drama Source Display: Ensure short drama sources display correctly in source selector
 
 ### Major Milestone Versions
 
+- **v5.6.3**: Short Drama Multi-source Search, Smart Source Filtering, Upcoming Smart Distribution, Comprehensive z-index Conflict Fixes
+- **v5.6.2**: Upcoming Release Calendar, Hero Banner Full Category Support, Live DVR Detection, Mobile Banner Optimization
+- **v5.6.1**: Hero Banner & Modern Navigation UI, TVBox Intelligent Search Proxy, Export Format Selection
+- **v5.6.0**: Telegram Magic Link authentication, Source Browser & Testing Module, video source import/export
 - **v5.5.0**: User level system, release calendar, inactive user cleanup
 - **v5.4.0**: Complete short drama features, playback statistics system
 - **v5.3.0**: YouTube integration, AI recommendation system, TVBox security config

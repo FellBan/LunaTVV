@@ -133,6 +133,10 @@ function LivePageClient() {
   const [searchQuery, setSearchQuery] = useState('');
   const [currentSourceSearchResults, setCurrentSourceSearchResults] = useState<LiveChannel[]>([]);
 
+  // 直播源搜索状态
+  const [sourceSearchQuery, setSourceSearchQuery] = useState('');
+  const [filteredSources, setFilteredSources] = useState<LiveSource[]>([]);
+
   // 节目单信息
   const [epgData, setEpgData] = useState<{
     tvgId: string;
@@ -152,6 +156,11 @@ function LivePageClient() {
   const [favorited, setFavorited] = useState(false);
   const favoritedRef = useRef(false);
   const currentChannelRef = useRef<LiveChannel | null>(null);
+
+  // DVR 回放检测状态
+  const [dvrDetected, setDvrDetected] = useState(false);
+  const [dvrSeekableRange, setDvrSeekableRange] = useState(0);
+  const [enableDvrMode, setEnableDvrMode] = useState(false); // 用户手动启用DVR模式
 
   // EPG数据清洗函数 - 去除重叠的节目，保留时间较短的，只显示今日节目
   const cleanEpgData = (programs: Array<{ start: string; end: string; title: string }>) => {
@@ -750,7 +759,7 @@ function LivePageClient() {
     }
 
     const normalizedQuery = query.toLowerCase();
-    const results = currentChannels.filter(channel => 
+    const results = currentChannels.filter(channel =>
       channel.name.toLowerCase().includes(normalizedQuery) ||
       channel.group.toLowerCase().includes(normalizedQuery)
     );
@@ -764,6 +773,30 @@ function LivePageClient() {
   const handleSearchChange = (query: string) => {
     setSearchQuery(query);
     debouncedSearch(query);
+  };
+
+  // 搜索直播源
+  const searchLiveSources = (query: string) => {
+    if (!query.trim()) {
+      setFilteredSources(liveSources);
+      return;
+    }
+
+    const normalizedQuery = query.toLowerCase();
+    const results = liveSources.filter(source =>
+      source.name.toLowerCase().includes(normalizedQuery) ||
+      source.key.toLowerCase().includes(normalizedQuery)
+    );
+    setFilteredSources(results);
+  };
+
+  // 防抖搜索直播源
+  const debouncedSourceSearch = debounce(searchLiveSources, 300);
+
+  // 处理直播源搜索输入
+  const handleSourceSearchChange = (query: string) => {
+    setSourceSearchQuery(query);
+    debouncedSourceSearch(query);
   };
 
   // 切换收藏
@@ -818,6 +851,15 @@ function LivePageClient() {
   //     loadAllChannelsAcrossSources();
   //   }
   // }, [liveSources]);
+
+  // 当 liveSources 改变时，更新 filteredSources
+  useEffect(() => {
+    if (!sourceSearchQuery.trim()) {
+      setFilteredSources(liveSources);
+    } else {
+      searchLiveSources(sourceSearchQuery);
+    }
+  }, [liveSources]);
 
   // 检查收藏状态
   useEffect(() => {
@@ -1185,13 +1227,12 @@ function LivePageClient() {
     });
 
     // 监听缓冲区卡顿和自动恢复
+    // v1.6.15 改进：HLS.js 内部已优化 buffer stall 和 gap segment 处理
     hls.on(Hls.Events.ERROR, (event, data) => {
       if (data.details === Hls.ErrorDetails.BUFFER_STALLED_ERROR) {
-        console.warn('Buffer stalled, attempting recovery...');
-        // 不做任何操作，让 HLS.js 自动处理
+        console.warn('[HLS v1.6.15] Buffer stalled - internal recovery improved');
       } else if (data.details === Hls.ErrorDetails.BUFFER_SEEK_OVER_HOLE) {
-        console.warn('Buffer hole detected, HLS.js will handle seeking...');
-        // 不做任何操作，让 HLS.js 自动跳过空洞
+        console.warn('[HLS v1.6.15] Buffer gap detected - internal handling improved');
       }
     });
 
@@ -1239,16 +1280,17 @@ function LivePageClient() {
       try {
         // 使用动态导入的 Artplayer
         const Artplayer = (window as any).DynamicArtplayer;
-        
+
         // 创建新的播放器实例
-        Artplayer.USE_RAF = true;
+        Artplayer.USE_RAF = false;
+        Artplayer.FULLSCREEN_WEB_IN_BODY = true;
 
         artPlayerRef.current = new Artplayer({
           container: artRef.current,
           url: targetUrl,
           poster: currentChannel.logo,
           volume: 0.7,
-          isLive: true, // 设置为直播模式
+          isLive: !enableDvrMode, // 根据用户设置决定是否为直播模式
           muted: false,
           autoplay: true,
           pip: true,
@@ -1291,6 +1333,34 @@ function LivePageClient() {
           setError(null);
           setIsVideoLoading(false);
 
+          // 延迟检测是否支持 DVR/时移回放（仅在未启用DVR模式时检测）
+          if (!enableDvrMode) {
+            setTimeout(() => {
+              if (artPlayerRef.current && artPlayerRef.current.video) {
+                const video = artPlayerRef.current.video;
+
+                try {
+                  if (video.seekable && video.seekable.length > 0) {
+                    const seekableEnd = video.seekable.end(0);
+                    const seekableStart = video.seekable.start(0);
+                    const seekableRange = seekableEnd - seekableStart;
+
+                    // 如果可拖动范围大于60秒，说明支持回放
+                    if (seekableRange > 60) {
+                      console.log('✓ 检测到支持回放，可拖动范围:', Math.floor(seekableRange), '秒');
+                      setDvrDetected(true);
+                      setDvrSeekableRange(Math.floor(seekableRange));
+                    } else {
+                      console.log('✗ 纯直播流，可拖动范围:', Math.floor(seekableRange), '秒');
+                      setDvrDetected(false);
+                    }
+                  }
+                } catch (error) {
+                  console.log('DVR检测失败:', error);
+                }
+              }
+            }, 3000); // 等待3秒让HLS加载足够的片段
+          }
         });
 
         artPlayerRef.current.on('loadstart', () => {
@@ -1648,6 +1718,50 @@ function LivePageClient() {
                   </div>
                 )}
 
+                {/* DVR 回放支持提示 */}
+                {dvrDetected && (
+                  <div className='absolute top-4 left-4 right-4 bg-gradient-to-r from-blue-500/90 to-cyan-500/90 backdrop-blur-sm rounded-lg px-4 py-3 shadow-lg z-[550] animate-in fade-in slide-in-from-top-2 duration-300'>
+                    <div className='flex items-center justify-between'>
+                      <div className='flex items-center gap-3 flex-1'>
+                        <div className='flex-shrink-0'>
+                          <div className='w-8 h-8 bg-white/20 rounded-full flex items-center justify-center'>
+                            <span className='text-lg'>⏯️</span>
+                          </div>
+                        </div>
+                        <div className='flex-1 min-w-0'>
+                          <p className='text-sm font-semibold text-white'>
+                            此频道支持回放功能
+                          </p>
+                          <p className='text-xs text-white/90 mt-0.5'>
+                            可拖动范围: {Math.floor(dvrSeekableRange / 60)} 分钟
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => {
+                          // 启用DVR模式并重新加载播放器
+                          setEnableDvrMode(true);
+                          setDvrDetected(false); // 隐藏提示
+                          if (currentChannel) {
+                            const currentUrl = currentChannel.url;
+                            setVideoUrl('');
+                            setTimeout(() => setVideoUrl(currentUrl), 100);
+                          }
+                        }}
+                        className='ml-2 px-3 py-1.5 bg-white/20 hover:bg-white/30 text-white text-xs font-medium rounded transition-colors whitespace-nowrap'
+                      >
+                        启用进度条
+                      </button>
+                      <button
+                        onClick={() => setDvrDetected(false)}
+                        className='ml-2 p-1 hover:bg-white/20 rounded transition-colors'
+                      >
+                        <X className='w-4 h-4 text-white' />
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 {/* 视频加载蒙层 */}
                 {isVideoLoading && (
                   <div className='absolute inset-0 bg-black/85 backdrop-blur-sm rounded-xl overflow-hidden shadow-lg border border-white/0 dark:border-white/30 flex items-center justify-center z-[500] transition-all duration-300'>
@@ -1829,11 +1943,15 @@ function LivePageClient() {
                                   )}
                                 </div>
                                 <div className='flex-1 min-w-0'>
-                                  <div className='text-sm font-medium text-gray-900 dark:text-gray-100 truncate' title={channel.name}>
-                                    {channel.name}
+                                  <div className='text-sm font-medium text-gray-900 dark:text-gray-100 overflow-hidden group/channelName'>
+                                    <span className='inline-block whitespace-nowrap group-hover/channelName:animate-scroll-text'>
+                                      {channel.name}
+                                    </span>
                                   </div>
-                                  <div className='text-xs text-gray-500 dark:text-gray-400 mt-1' title={channel.group}>
-                                    {channel.group}
+                                  <div className='text-xs text-gray-500 dark:text-gray-400 mt-1 overflow-hidden group/channelGroup'>
+                                    <span className='inline-block whitespace-nowrap group-hover/channelGroup:animate-scroll-text'>
+                                      {channel.group}
+                                    </span>
                                   </div>
                                 </div>
                               </div>
@@ -1842,13 +1960,18 @@ function LivePageClient() {
                         })
                       ) : (
                         <div className='flex flex-col items-center justify-center py-12 text-center'>
-                          <div className='w-16 h-16 bg-gray-100 dark:bg-gray-800 rounded-full flex items-center justify-center mb-4'>
-                            <Tv className='w-8 h-8 text-gray-400 dark:text-gray-600' />
+                          <div className='relative mb-6'>
+                            <div className='w-20 h-20 bg-gradient-to-br from-gray-100 to-slate-200 dark:from-gray-700 dark:to-slate-700 rounded-2xl flex items-center justify-center shadow-lg'>
+                              <Tv className='w-10 h-10 text-gray-400 dark:text-gray-500' />
+                            </div>
+                            {/* 装饰小点 */}
+                            <div className='absolute -top-1 -right-1 w-3 h-3 bg-blue-400 rounded-full animate-ping'></div>
+                            <div className='absolute -bottom-1 -left-1 w-2 h-2 bg-purple-400 rounded-full animate-pulse'></div>
                           </div>
-                          <p className='text-gray-500 dark:text-gray-400 font-medium'>
+                          <p className='text-base font-semibold text-gray-700 dark:text-gray-300 mb-2'>
                             暂无可用频道
                           </p>
-                          <p className='text-sm text-gray-400 dark:text-gray-500 mt-1'>
+                          <p className='text-sm text-gray-500 dark:text-gray-400'>
                             请选择其他直播源或稍后再试
                           </p>
                         </div>
@@ -1896,18 +2019,22 @@ function LivePageClient() {
                                     )}
                                   </div>
                                   <div className='flex-1 min-w-0'>
-                                    <div 
-                                      className='text-sm font-medium text-gray-900 dark:text-gray-100 truncate'
-                                      dangerouslySetInnerHTML={{ 
-                                        __html: searchQuery ? 
-                                          channel.name.replace(
-                                            new RegExp(`(${searchQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi'), 
-                                            '<mark class="bg-yellow-200 dark:bg-yellow-800 px-0.5 rounded">$1</mark>'
-                                          ) : channel.name 
-                                      }}
-                                    />
-                                    <div className='text-xs text-gray-500 dark:text-gray-400 mt-1'>
-                                      {channel.group}
+                                    <div className='text-sm font-medium text-gray-900 dark:text-gray-100 overflow-hidden group/searchName'>
+                                      <span
+                                        className='inline-block whitespace-nowrap group-hover/searchName:animate-scroll-text'
+                                        dangerouslySetInnerHTML={{
+                                          __html: searchQuery ?
+                                            channel.name.replace(
+                                              new RegExp(`(${searchQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi'),
+                                              '<mark class="bg-yellow-200 dark:bg-yellow-800 px-0.5 rounded">$1</mark>'
+                                            ) : channel.name
+                                        }}
+                                      />
+                                    </div>
+                                    <div className='text-xs text-gray-500 dark:text-gray-400 mt-1 overflow-hidden group/searchGroup'>
+                                      <span className='inline-block whitespace-nowrap group-hover/searchGroup:animate-scroll-text'>
+                                        {channel.group}
+                                      </span>
                                     </div>
                                   </div>
                                 </div>
@@ -1935,6 +2062,28 @@ function LivePageClient() {
                 {/* 直播源 Tab 内容 */}
                 {activeTab === 'sources' && (
                   <div className='flex flex-col h-full mt-4'>
+                    {/* 搜索框 */}
+                    <div className='mb-4 -mx-6 px-6 flex-shrink-0'>
+                      <div className='relative'>
+                        <Search className='absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400' />
+                        <input
+                          type='text'
+                          placeholder='搜索直播源...'
+                          value={sourceSearchQuery}
+                          onChange={(e) => handleSourceSearchChange(e.target.value)}
+                          className='w-full pl-10 pr-8 py-2 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg text-sm focus:ring-2 focus:ring-green-500 focus:border-transparent'
+                        />
+                        {sourceSearchQuery && (
+                          <button
+                            onClick={() => handleSourceSearchChange('')}
+                            className='absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'
+                          >
+                            <X className='w-4 h-4' />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
                     {/* 刷新控制区域 */}
                     <div className='mb-4 -mx-6 px-6 flex-shrink-0 space-y-3'>
                       {/* 手动刷新按钮 */}
@@ -1981,10 +2130,19 @@ function LivePageClient() {
                         )}
                       </div>
                     </div>
-                    
+
+                    {/* 搜索结果统计 */}
+                    {sourceSearchQuery.trim() && filteredSources.length > 0 && (
+                      <div className='mb-2 -mx-6 px-6 flex-shrink-0'>
+                        <div className='text-xs text-gray-500 dark:text-gray-400'>
+                          找到 {filteredSources.length} 个直播源
+                        </div>
+                      </div>
+                    )}
+
                     <div className='flex-1 overflow-y-auto space-y-2 pb-20'>
-                      {liveSources.length > 0 ? (
-                        liveSources.map((source) => {
+                      {filteredSources.length > 0 ? (
+                        filteredSources.map((source) => {
                           const isCurrentSource = source.key === currentSource?.key;
                           return (
                             <div
@@ -2004,7 +2162,18 @@ function LivePageClient() {
                               {/* 信息 */}
                               <div className='flex-1 min-w-0'>
                                 <div className='text-sm font-medium text-gray-900 dark:text-gray-100 truncate'>
-                                  {source.name}
+                                  {sourceSearchQuery ? (
+                                    <span
+                                      dangerouslySetInnerHTML={{
+                                        __html: source.name.replace(
+                                          new RegExp(`(${sourceSearchQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi'),
+                                          '<mark class="bg-yellow-200 dark:bg-yellow-800 px-0.5 rounded">$1</mark>'
+                                        )
+                                      }}
+                                    />
+                                  ) : (
+                                    source.name
+                                  )}
                                 </div>
                                 <div className='text-xs text-gray-500 dark:text-gray-400 mt-1'>
                                   {!source.channelNumber || source.channelNumber === 0 ? '-' : `${source.channelNumber} 个频道`}
@@ -2020,15 +2189,38 @@ function LivePageClient() {
                         })
                       ) : (
                         <div className='flex flex-col items-center justify-center py-12 text-center'>
-                          <div className='w-16 h-16 bg-gray-100 dark:bg-gray-800 rounded-full flex items-center justify-center mb-4'>
-                            <Radio className='w-8 h-8 text-gray-400 dark:text-gray-600' />
-                          </div>
-                          <p className='text-gray-500 dark:text-gray-400 font-medium'>
-                            暂无可用直播源
-                          </p>
-                          <p className='text-sm text-gray-400 dark:text-gray-500 mt-1'>
-                            请检查网络连接或联系管理员添加直播源
-                          </p>
+                          {sourceSearchQuery.trim() ? (
+                            // 搜索无结果
+                            <>
+                              <div className='w-16 h-16 bg-gray-100 dark:bg-gray-800 rounded-full flex items-center justify-center mb-4'>
+                                <Search className='w-8 h-8 text-gray-400 dark:text-gray-600' />
+                              </div>
+                              <p className='text-gray-500 dark:text-gray-400 font-medium'>
+                                未找到匹配的直播源
+                              </p>
+                              <p className='text-sm text-gray-400 dark:text-gray-500 mt-1'>
+                                搜索 "{sourceSearchQuery}" 无结果
+                              </p>
+                            </>
+                          ) : (
+                            // 无直播源
+                            <>
+                              <div className='relative mb-6'>
+                                <div className='w-20 h-20 bg-gradient-to-br from-orange-100 to-red-200 dark:from-orange-900/40 dark:to-red-900/40 rounded-2xl flex items-center justify-center shadow-lg'>
+                                  <Radio className='w-10 h-10 text-orange-500 dark:text-orange-400' />
+                                </div>
+                                {/* 装饰小点 */}
+                                <div className='absolute -top-1 -right-1 w-3 h-3 bg-orange-400 rounded-full animate-ping'></div>
+                                <div className='absolute -bottom-1 -left-1 w-2 h-2 bg-red-400 rounded-full animate-pulse'></div>
+                              </div>
+                              <p className='text-base font-semibold text-gray-700 dark:text-gray-300 mb-2'>
+                                暂无可用直播源
+                              </p>
+                              <p className='text-sm text-gray-500 dark:text-gray-400'>
+                                请检查网络连接或联系管理员添加直播源
+                              </p>
+                            </>
+                          )}
                         </div>
                       )}
                     </div>

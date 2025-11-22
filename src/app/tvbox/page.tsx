@@ -14,6 +14,11 @@ interface SecurityConfig {
   rateLimit: number;
 }
 
+interface Source {
+  key: string;
+  name: string;
+}
+
 interface DiagnosisResult {
   spider?: string;
   spiderPrivate?: boolean;
@@ -138,6 +143,12 @@ export default function TVBoxConfigPage() {
   const [copied, setCopied] = useState(false);
   const [format, setFormat] = useState<'json' | 'base64'>('json');
   const [configMode, setConfigMode] = useState<'standard' | 'safe' | 'fast' | 'yingshicang'>('standard');
+
+  // 🎯 智能搜索和过滤控制
+  const [enableAdultFilter, setEnableAdultFilter] = useState(true); // 默认启用过滤
+  const [enableSmartProxy, setEnableSmartProxy] = useState(true); // 默认启用智能搜索
+  const [enableStrictMode, setEnableStrictMode] = useState(false); // 默认不启用严格模式
+
   const [securityConfig, setSecurityConfig] = useState<SecurityConfig | null>(null);
   const [siteName, setSiteName] = useState('MoonTV');
   const [loading, setLoading] = useState(true);
@@ -145,6 +156,11 @@ export default function TVBoxConfigPage() {
   const [diagnosisResult, setDiagnosisResult] = useState<DiagnosisResult | null>(null);
   const [refreshingJar, setRefreshingJar] = useState(false);
   const [jarRefreshMsg, setJarRefreshMsg] = useState<string | null>(null);
+
+  // 🔑 新增：用户专属配置状态
+  const [userToken, setUserToken] = useState('');
+  const [userEnabledSources, setUserEnabledSources] = useState<string[]>([]);
+  const [allSources, setAllSources] = useState<Source[]>([]);
 
   // 智能健康检查状态
   const [smartHealthResult, setSmartHealthResult] = useState<SmartHealthResult | null>(null);
@@ -169,6 +185,10 @@ export default function TVBoxConfigPage() {
         const data = await response.json();
         setSecurityConfig(data.securityConfig || null);
         setSiteName(data.siteName || 'MoonTV');
+        // 🔑 新增：设置用户专属配置
+        setUserToken(data.userToken || '');
+        setUserEnabledSources(data.userEnabledSources || []);
+        setAllSources(data.allSources || []);
       }
     } catch (error) {
       console.error('获取安全配置失败:', error);
@@ -188,8 +208,10 @@ export default function TVBoxConfigPage() {
 
     params.append('format', format);
 
-    // 如果启用了Token验证，自动添加token参数
-    if (securityConfig?.enableAuth && securityConfig.token) {
+    // 🔑 优先使用用户专属 Token，如果没有则使用全局 Token
+    if (userToken) {
+      params.append('token', userToken);
+    } else if (securityConfig?.enableAuth && securityConfig.token) {
       params.append('token', securityConfig.token);
     }
 
@@ -198,8 +220,19 @@ export default function TVBoxConfigPage() {
       params.append('mode', configMode);
     }
 
+    // 🎯 智能搜索和过滤参数
+    if (!enableAdultFilter) {
+      params.append('filter', 'off');
+    }
+    if (!enableSmartProxy) {
+      params.append('proxy', 'off');
+    }
+    if (enableStrictMode) {
+      params.append('strict', '1');
+    }
+
     return `${baseUrl}/api/tvbox?${params.toString()}`;
-  }, [format, configMode, securityConfig]);
+  }, [format, configMode, securityConfig, userToken, enableAdultFilter, enableSmartProxy, enableStrictMode]);
 
   const handleCopy = async () => {
     try {
@@ -328,8 +361,66 @@ export default function TVBoxConfigPage() {
           </div>
         </div>
 
+        {/* 🎯 新功能提示 */}
+        <div className="mb-6">
+          <div className="bg-gradient-to-r from-blue-50 to-purple-50 dark:from-blue-900/20 dark:to-purple-900/20 border border-blue-200 dark:border-blue-700 rounded-lg p-4">
+            <div className="flex items-start gap-3">
+              <div className="flex-shrink-0 w-10 h-10 bg-blue-500 rounded-lg flex items-center justify-center">
+                <Search className="w-5 h-5 text-white" />
+              </div>
+              <div className="flex-1">
+                <h3 className="font-semibold text-blue-900 dark:text-blue-100 mb-2 flex items-center gap-2">
+                  ✨ 智能搜索和内容过滤功能
+                  <span className="px-2 py-0.5 text-xs bg-blue-500 text-white rounded-full">NEW</span>
+                </h3>
+                <div className="text-sm text-blue-800 dark:text-blue-200 space-y-1.5">
+                  <p>
+                    <strong>🎯 智能搜索代理：</strong>
+                    自动优化搜索结果，相关度高的内容优先显示，解决 TVBox 搜索不精确的问题
+                  </p>
+                  <p>
+                    <strong>🔒 成人内容过滤：</strong>
+                    基于 29+ 敏感关键词智能过滤，保护家庭观看环境
+                  </p>
+                  <p>
+                    <strong>⚡ 严格匹配模式：</strong>
+                    过滤不相关结果，只返回高度匹配的内容
+                  </p>
+                  <p className="text-xs mt-2 pt-2 border-t border-blue-200 dark:border-blue-700">
+                    💡 默认已启用家庭安全模式，您可以在下方自定义配置。TVBox 端无需任何设置，自动生效！
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* 用户专属配置提示 */}
+        {!loading && userToken && (
+          <div className="mb-6">
+            <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-700 rounded-lg p-4">
+              <div className="flex items-start gap-3">
+                <Shield className="w-5 h-5 text-blue-600 dark:text-blue-400 mt-0.5" />
+                <div className="flex-1">
+                  <h3 className="font-semibold text-blue-800 dark:text-blue-200 mb-1">
+                    🔑 您的专属TVBox配置
+                  </h3>
+                  <div className="text-sm text-blue-700 dark:text-blue-300 space-y-1">
+                    <p>• 此配置链接仅供您个人使用，请勿分享给他人</p>
+                    {userEnabledSources.length > 0 ? (
+                      <p>• 源限制：您可以访问 {userEnabledSources.length} 个指定源</p>
+                    ) : (
+                      <p>• 源权限：您可以访问所有可用源（{allSources.length} 个）</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* 安全状态提示 */}
-        {!loading && securityConfig && (
+        {!loading && securityConfig && !userToken && (
           <div className="mb-6">
             {(securityConfig.enableAuth || securityConfig.enableIpWhitelist || securityConfig.enableRateLimit) ? (
               <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-700 rounded-lg p-4">
@@ -467,6 +558,256 @@ export default function TVBoxConfigPage() {
                 ? '⚡ 优化切换速度，移除超时配置，减少卡顿和 SSL 错误'
                 : '🎬 专为影视仓优化，包含播放规则和兼容性修复'}
             </p>
+          </div>
+
+          {/* 🎯 智能搜索和内容过滤 */}
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
+              🎯 智能搜索和内容过滤
+            </label>
+            <div className="space-y-3">
+              {/* 成人内容过滤 */}
+              <label className="flex items-center cursor-pointer p-3 border border-gray-300 dark:border-gray-600 rounded-lg hover:border-blue-500 dark:hover:border-blue-400 transition-colors">
+                <input
+                  type="checkbox"
+                  checked={enableAdultFilter}
+                  onChange={(e) => setEnableAdultFilter(e.target.checked)}
+                  className="mr-3 w-4 h-4 text-blue-600 focus:ring-blue-500 rounded"
+                />
+                <div className="flex-1">
+                  <div className="flex items-center">
+                    <Shield className="w-4 h-4 mr-2 text-blue-600 dark:text-blue-400" />
+                    <span className="font-medium text-gray-900 dark:text-white">
+                      启用成人内容过滤
+                    </span>
+                    <span className="ml-2 px-2 py-0.5 text-xs bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300 rounded">
+                      推荐
+                    </span>
+                  </div>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                    基于 29+ 敏感关键词过滤不良内容，保护家庭环境
+                  </p>
+                </div>
+              </label>
+
+              {/* 智能搜索代理 */}
+              <label className="flex items-center cursor-pointer p-3 border border-gray-300 dark:border-gray-600 rounded-lg hover:border-blue-500 dark:hover:border-blue-400 transition-colors">
+                <input
+                  type="checkbox"
+                  checked={enableSmartProxy}
+                  onChange={(e) => setEnableSmartProxy(e.target.checked)}
+                  className="mr-3 w-4 h-4 text-blue-600 focus:ring-blue-500 rounded"
+                />
+                <div className="flex-1">
+                  <div className="flex items-center">
+                    <Search className="w-4 h-4 mr-2 text-blue-600 dark:text-blue-400" />
+                    <span className="font-medium text-gray-900 dark:text-white">
+                      启用智能搜索代理
+                    </span>
+                    <span className="ml-2 px-2 py-0.5 text-xs bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 rounded">
+                      推荐
+                    </span>
+                  </div>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                    智能排序搜索结果，最相关的内容优先显示
+                  </p>
+                </div>
+              </label>
+
+              {/* 严格匹配模式 */}
+              <label className="flex items-center cursor-pointer p-3 border border-gray-300 dark:border-gray-600 rounded-lg hover:border-yellow-500 dark:hover:border-yellow-400 transition-colors">
+                <input
+                  type="checkbox"
+                  checked={enableStrictMode}
+                  onChange={(e) => setEnableStrictMode(e.target.checked)}
+                  className="mr-3 w-4 h-4 text-yellow-600 focus:ring-yellow-500 rounded"
+                />
+                <div className="flex-1">
+                  <div className="flex items-center">
+                    <AlertTriangle className="w-4 h-4 mr-2 text-yellow-600 dark:text-yellow-400" />
+                    <span className="font-medium text-gray-900 dark:text-white">
+                      严格匹配模式
+                    </span>
+                  </div>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                    只返回高度相关的搜索结果，过滤不精确匹配
+                  </p>
+                </div>
+              </label>
+            </div>
+            <div className="mt-2 p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
+              <p className="text-xs text-blue-800 dark:text-blue-300">
+                <strong>提示：</strong>
+                {enableAdultFilter && enableSmartProxy
+                  ? ' 家庭模式已启用，搜索结果已优化且过滤不良内容'
+                  : !enableAdultFilter
+                  ? ' ⚠️ 成人内容过滤已关闭，搜索结果可能包含敏感内容'
+                  : !enableSmartProxy
+                  ? ' ⚠️ 智能搜索已关闭，将直连原始 API（可能不精确）'
+                  : ''}
+              </p>
+            </div>
+          </div>
+
+          {/* ⚡ 快捷复制配置链接 */}
+          <div className="mb-4">
+            <div className="bg-gradient-to-r from-purple-50 to-pink-50 dark:from-purple-900/20 dark:to-pink-900/20 border border-purple-200 dark:border-purple-700 rounded-lg p-4">
+              <div className="mb-3">
+                <h3 className="text-sm font-semibold text-purple-900 dark:text-purple-100 mb-1">
+                  ⚡ 快捷复制配置
+                </h3>
+                <p className="text-xs text-purple-700 dark:text-purple-300">
+                  一键复制不同模式的配置链接，支持 URL 参数和路径前缀两种方式
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {/* 家庭安全模式按钮 */}
+                <button
+                  onClick={async () => {
+                    const baseUrl = window.location.origin;
+                    const params = new URLSearchParams();
+                    params.append('format', format);
+                    if (userToken) {
+                      params.append('token', userToken);
+                    } else if (securityConfig?.enableAuth && securityConfig.token) {
+                      params.append('token', securityConfig.token);
+                    }
+                    if (configMode !== 'standard') {
+                      params.append('mode', configMode);
+                    }
+                    const url = `${baseUrl}/api/tvbox?${params.toString()}`;
+
+                    try {
+                      await navigator.clipboard.writeText(url);
+                      setCopied(true);
+                      setTimeout(() => setCopied(false), 2000);
+                    } catch (err) {
+                      console.error('Copy failed:', err);
+                    }
+                  }}
+                  className="group flex items-center justify-between px-3 py-2.5 bg-green-50 dark:bg-green-900/20 border-2 border-green-200 dark:border-green-700 rounded-lg hover:border-green-400 dark:hover:border-green-500 hover:shadow-md transition-all"
+                >
+                  <div className="flex items-center space-x-2.5">
+                    <span className="text-xl">🏠</span>
+                    <div className="text-left">
+                      <div className="text-xs font-semibold text-green-700 dark:text-green-300">
+                        家庭安全模式
+                      </div>
+                      <div className="text-xs text-green-600 dark:text-green-400">
+                        过滤成人内容 + 智能搜索
+                      </div>
+                    </div>
+                  </div>
+                  <div className="opacity-0 group-hover:opacity-100 transition-opacity">
+                    <svg className="w-4 h-4 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                    </svg>
+                  </div>
+                </button>
+
+                {/* 完整内容模式按钮（URL 参数） */}
+                <button
+                  onClick={async () => {
+                    const baseUrl = window.location.origin;
+                    const params = new URLSearchParams();
+                    params.append('format', format);
+                    if (userToken) {
+                      params.append('token', userToken);
+                    } else if (securityConfig?.enableAuth && securityConfig.token) {
+                      params.append('token', securityConfig.token);
+                    }
+                    if (configMode !== 'standard') {
+                      params.append('mode', configMode);
+                    }
+                    params.append('filter', 'off'); // 关闭过滤
+                    const url = `${baseUrl}/api/tvbox?${params.toString()}`;
+
+                    try {
+                      await navigator.clipboard.writeText(url);
+                      setCopied(true);
+                      setTimeout(() => setCopied(false), 2000);
+                    } catch (err) {
+                      console.error('Copy failed:', err);
+                    }
+                  }}
+                  className="group flex items-center justify-between px-3 py-2.5 bg-orange-50 dark:bg-orange-900/20 border-2 border-orange-200 dark:border-orange-700 rounded-lg hover:border-orange-400 dark:hover:border-orange-500 hover:shadow-md transition-all"
+                >
+                  <div className="flex items-center space-x-2.5">
+                    <span className="text-xl">🔓</span>
+                    <div className="text-left">
+                      <div className="text-xs font-semibold text-orange-700 dark:text-orange-300">
+                        完整内容模式
+                      </div>
+                      <div className="text-xs text-orange-600 dark:text-orange-400">
+                        URL 参数模式
+                      </div>
+                    </div>
+                  </div>
+                  <div className="opacity-0 group-hover:opacity-100 transition-opacity">
+                    <svg className="w-4 h-4 text-orange-600 dark:text-orange-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                    </svg>
+                  </div>
+                </button>
+
+                {/* 完整内容模式按钮（路径前缀） */}
+                <button
+                  onClick={async () => {
+                    const baseUrl = window.location.origin;
+                    const params = new URLSearchParams();
+                    params.append('format', format);
+                    if (userToken) {
+                      params.append('token', userToken);
+                    } else if (securityConfig?.enableAuth && securityConfig.token) {
+                      params.append('token', securityConfig.token);
+                    }
+                    if (configMode !== 'standard') {
+                      params.append('mode', configMode);
+                    }
+                    // 使用 /adult/ 路径前缀
+                    const url = `${baseUrl}/adult/api/tvbox?${params.toString()}`;
+
+                    try {
+                      await navigator.clipboard.writeText(url);
+                      setCopied(true);
+                      setTimeout(() => setCopied(false), 2000);
+                    } catch (err) {
+                      console.error('Copy failed:', err);
+                    }
+                  }}
+                  className="group flex items-center justify-between px-3 py-2.5 bg-blue-50 dark:bg-blue-900/20 border-2 border-blue-200 dark:border-blue-700 rounded-lg hover:border-blue-400 dark:hover:border-blue-500 hover:shadow-md transition-all"
+                >
+                  <div className="flex items-center space-x-2.5">
+                    <span className="text-xl">⭐</span>
+                    <div className="text-left">
+                      <div className="text-xs font-semibold text-blue-700 dark:text-blue-300">
+                        完整内容模式
+                      </div>
+                      <div className="text-xs text-blue-600 dark:text-blue-400">
+                        路径前缀（OrionTV）
+                      </div>
+                    </div>
+                  </div>
+                  <div className="opacity-0 group-hover:opacity-100 transition-opacity">
+                    <svg className="w-4 h-4 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                    </svg>
+                  </div>
+                </button>
+              </div>
+
+              <div className="mt-3 p-2.5 bg-purple-100 dark:bg-purple-900/30 border border-purple-200 dark:border-purple-800 rounded-lg">
+                <p className="text-xs text-purple-800 dark:text-purple-200 mb-1.5">
+                  💡 <strong>提示：</strong>点击按钮即可复制对应模式的配置链接
+                </p>
+                <ul className="text-xs text-purple-700 dark:text-purple-300 space-y-0.5 ml-4">
+                  <li>🏠 <strong>家庭安全模式：</strong>过滤成人内容（推荐家庭用户）</li>
+                  <li>🔓 <strong>URL 参数模式：</strong>适用于 TVBox 等标准客户端</li>
+                  <li>⭐ <strong>路径前缀模式：</strong>适用于 OrionTV 等不支持 URL 参数的客户端</li>
+                </ul>
+              </div>
+            </div>
           </div>
 
           <div className="flex items-center space-x-2">

@@ -167,12 +167,29 @@ export async function GET(request: NextRequest) {
     // 读取当前配置
     const config = await getConfig();
     const securityConfig = config.TVBoxSecurityConfig;
-    
-    // Token验证（从数据库配置读取）
+
+    // 🔑 新增：基于用户 Token 的身份识别
+    let currentUser: { username: string; tvboxEnabledSources?: string[]; showAdultContent?: boolean } | null = null;
+
+    // 优先尝试用户专属 Token（支持用户级源限制）
+    if (token) {
+      const user = config.UserConfig.Users.find(u => u.tvboxToken === token);
+      if (user) {
+        currentUser = {
+          username: user.username,
+          tvboxEnabledSources: user.tvboxEnabledSources,
+          showAdultContent: user.showAdultContent
+        };
+        console.log(`[TVBox] 识别到用户 ${user.username}，源限制:`, user.tvboxEnabledSources || '无限制');
+      }
+    }
+
+    // Token验证（兼容旧的全局 Token 模式）
     if (securityConfig?.enableAuth) {
       const validToken = securityConfig.token;
-      if (!token || token !== validToken) {
-        return NextResponse.json({ 
+      // 如果不是用户专属 Token，则必须是全局 Token
+      if (!currentUser && (!token || token !== validToken)) {
+        return NextResponse.json({
           error: 'Invalid token. Please add ?token=YOUR_TOKEN to the URL',
           hint: '请在URL中添加 ?token=你的密钥 参数'
         }, { status: 401 });
@@ -263,7 +280,53 @@ export async function GET(request: NextRequest) {
     }
 
     // 过滤掉被禁用的源站和没有API地址的源站
-    const enabledSources = sourceConfigs.filter(source => !source.disabled && source.api && source.api.trim() !== '');
+    let enabledSources = sourceConfigs.filter(source => !source.disabled && source.api && source.api.trim() !== '');
+
+    // 🔑 成人内容过滤：确定成人内容显示权限，优先级：用户 > 用户组 > 全局
+    let showAdultContent = config.SiteConfig.ShowAdultContent;
+
+    if (currentUser) {
+      // 用户级别优先
+      if (currentUser.showAdultContent !== undefined) {
+        showAdultContent = currentUser.showAdultContent;
+      }
+      // 如果用户没有设置，检查用户组设置
+      else {
+        const user = config.UserConfig.Users.find(u => u.username === currentUser!.username);
+        if (user?.tags && user.tags.length > 0 && config.UserConfig.Tags) {
+          // 如果用户有多个用户组，只要有一个用户组允许就允许（取并集）
+          const hasAnyTagAllowAdult = user.tags.some(tagName => {
+            const tagConfig = config.UserConfig.Tags?.find(t => t.name === tagName);
+            return tagConfig?.showAdultContent === true;
+          });
+          if (hasAnyTagAllowAdult) {
+            showAdultContent = true;
+          } else {
+            // 检查是否有任何用户组明确禁止
+            const hasAnyTagDenyAdult = user.tags.some(tagName => {
+              const tagConfig = config.UserConfig.Tags?.find(t => t.name === tagName);
+              return tagConfig?.showAdultContent === false;
+            });
+            if (hasAnyTagDenyAdult) {
+              showAdultContent = false;
+            }
+          }
+        }
+      }
+    }
+
+    // 过滤成人内容源
+    if (!showAdultContent) {
+      enabledSources = enabledSources.filter(source => !source.is_adult);
+      console.log(`[TVBox] 成人内容过滤已启用，剩余源数量: ${enabledSources.length}`);
+    }
+
+    // 🔑 新增：应用用户的源限制（如果有）
+    if (currentUser?.tvboxEnabledSources && currentUser.tvboxEnabledSources.length > 0) {
+      const allowedSourceKeys = new Set(currentUser.tvboxEnabledSources);
+      enabledSources = enabledSources.filter(source => allowedSourceKeys.has(source.key));
+      console.log(`[TVBox] 用户 ${currentUser.username} 限制后的源数量: ${enabledSources.length}`);
+    }
 
     // 跟踪全局 spider jar（从 detail 字段中提取）
     let globalSpiderJar = '';

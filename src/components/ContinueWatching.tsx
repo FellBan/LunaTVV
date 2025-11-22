@@ -1,6 +1,7 @@
 /* eslint-disable no-console */
 'use client';
 
+import { Clock } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 import type { PlayRecord } from '@/lib/db.client';
@@ -18,6 +19,7 @@ import {
 } from '@/lib/watching-updates';
 
 import ScrollableRow from '@/components/ScrollableRow';
+import SectionTitle from '@/components/SectionTitle';
 import VideoCard from '@/components/VideoCard';
 
 interface ContinueWatchingProps {
@@ -188,12 +190,10 @@ export default function ContinueWatching({ className }: ContinueWatchingProps) {
   return (
     <section className={`mb-8 ${className || ''}`}>
       <div className='mb-4 flex items-center justify-between'>
-        <h2 className='text-xl font-bold text-gray-800 dark:text-gray-200'>
-          继续观看
-        </h2>
+        <SectionTitle title="继续观看" icon={Clock} iconColor="text-green-500" />
         {!loading && playRecords.length > 0 && (
           <button
-            className='text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
+            className='text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 transition-colors'
             onClick={async () => {
               await clearAllPlayRecords();
               setPlayRecords([]);
@@ -226,31 +226,33 @@ export default function ContinueWatching({ className }: ContinueWatchingProps) {
               return (
                 <div
                   key={record.key}
-                  className='min-w-[96px] w-24 sm:min-w-[180px] sm:w-44 relative'
+                  className='min-w-[96px] w-24 sm:min-w-[180px] sm:w-44 relative group/card'
                 >
-                  <VideoCard
-                    id={id}
-                    title={record.title}
-                    poster={record.cover}
-                    year={record.year}
-                    source={source}
-                    source_name={record.source_name}
-                    progress={getProgress(record)}
-                    episodes={latestTotalEpisodes}
-                    currentEpisode={record.index}
-                    query={record.search_title}
-                    from='playrecord'
-                    onDelete={() =>
-                      setPlayRecords((prev) =>
-                        prev.filter((r) => r.key !== record.key)
-                      )
-                    }
-                    type={latestTotalEpisodes > 1 ? 'tv' : ''}
-                    remarks={record.remarks}
-                  />
+                  <div className='relative group-hover/card:z-[5] transition-all duration-300'>
+                    <VideoCard
+                      id={id}
+                      title={record.title}
+                      poster={record.cover}
+                      year={record.year}
+                      source={source}
+                      source_name={record.source_name}
+                      progress={getProgress(record)}
+                      episodes={latestTotalEpisodes}
+                      currentEpisode={record.index}
+                      query={record.search_title}
+                      from='playrecord'
+                      onDelete={() =>
+                        setPlayRecords((prev) =>
+                          prev.filter((r) => r.key !== record.key)
+                        )
+                      }
+                      type={latestTotalEpisodes > 1 ? 'tv' : ''}
+                      remarks={record.remarks}
+                    />
+                  </div>
                   {/* 新集数徽章 */}
                   {newEpisodesCount > 0 && (
-                    <div className='absolute -top-2 -right-2 bg-gradient-to-r from-red-500 to-pink-500 text-white text-xs px-2 py-1 rounded-full shadow-lg z-50'>
+                    <div className='absolute -top-2 -right-2 bg-gradient-to-r from-red-500 to-pink-500 text-white text-xs px-2 py-1 rounded-full shadow-lg z-10'>
                       +{newEpisodesCount}集
                     </div>
                   )}
