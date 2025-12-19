@@ -11,7 +11,9 @@ import EpisodeSelector from '@/components/EpisodeSelector';
 import NetDiskSearchResults from '@/components/NetDiskSearchResults';
 import PageLayout from '@/components/PageLayout';
 import SkipController, { SkipSettingsButton } from '@/components/SkipController';
+import VideoCard from '@/components/VideoCard';
 import artplayerPluginChromecast from '@/lib/artplayer-plugin-chromecast';
+import artplayerPluginLiquidGlass from '@/lib/artplayer-plugin-liquid-glass';
 import { ClientCache } from '@/lib/client-cache';
 import {
   deleteFavorite,
@@ -24,7 +26,7 @@ import {
   savePlayRecord,
   subscribeToDataUpdates,
 } from '@/lib/db.client';
-import { getDoubanDetails } from '@/lib/douban.client';
+import { getDoubanDetails, getDoubanComments, getDoubanActorMovies } from '@/lib/douban.client';
 import { SearchResult } from '@/lib/types';
 import { getVideoResolutionFromM3u8, processImageUrl } from '@/lib/utils';
 
@@ -65,6 +67,11 @@ function PlayPageClient() {
   const [movieDetails, setMovieDetails] = useState<any>(null);
   const [loadingMovieDetails, setLoadingMovieDetails] = useState(false);
 
+  // 豆瓣短评状态
+  const [movieComments, setMovieComments] = useState<any[]>([]);
+  const [loadingComments, setLoadingComments] = useState(false);
+  const [commentsError, setCommentsError] = useState<string | null>(null);
+
   // 返回顶部按钮显示状态
   const [showBackToTop, setShowBackToTop] = useState(false);
 
@@ -81,6 +88,11 @@ function PlayPageClient() {
   const [netdiskLoading, setNetdiskLoading] = useState(false);
   const [netdiskError, setNetdiskError] = useState<string | null>(null);
   const [netdiskTotal, setNetdiskTotal] = useState(0);
+
+  // 演员作品状态
+  const [selectedCelebrityName, setSelectedCelebrityName] = useState<string | null>(null);
+  const [celebrityWorks, setCelebrityWorks] = useState<any[]>([]);
+  const [loadingCelebrityWorks, setLoadingCelebrityWorks] = useState(false);
 
   // SkipController 相关状态
   const [isSkipSettingOpen, setIsSkipSettingOpen] = useState(false);
@@ -233,6 +245,49 @@ function PlayPageClient() {
     loadMovieDetails();
   }, [videoDoubanId, loadingMovieDetails, movieDetails, loadingBangumiDetails, bangumiDetails]);
 
+  // 加载豆瓣短评
+  useEffect(() => {
+    const loadComments = async () => {
+      if (!videoDoubanId || videoDoubanId === 0 || detail?.source === 'shortdrama') {
+        return;
+      }
+
+      // 跳过bangumi ID
+      if (isBangumiId(videoDoubanId)) {
+        return;
+      }
+
+      // 如果已经加载过短评，不重复加载
+      if (loadingComments || movieComments.length > 0) {
+        return;
+      }
+
+      setLoadingComments(true);
+      setCommentsError(null);
+      try {
+        const response = await getDoubanComments({
+          id: videoDoubanId.toString(),
+          start: 0,
+          limit: 10,
+          sort: 'new_score'
+        });
+
+        if (response.code === 200 && response.data) {
+          setMovieComments(response.data.comments);
+        } else {
+          setCommentsError(response.message);
+        }
+      } catch (error) {
+        console.error('Failed to load comments:', error);
+        setCommentsError('加载短评失败');
+      } finally {
+        setLoadingComments(false);
+      }
+    };
+
+    loadComments();
+  }, [videoDoubanId, loadingComments, movieComments.length, detail?.source]);
+
   // 加载短剧详情（仅用于显示简介等信息，不影响源搜索）
   useEffect(() => {
     const loadShortdramaDetails = async () => {
@@ -242,7 +297,10 @@ function PlayPageClient() {
 
       setLoadingShortdramaDetails(true);
       try {
-        const response = await fetch(`/api/shortdrama/detail?id=${shortdramaId}&episode=1`);
+        // 传递 name 参数以支持备用API fallback
+        const dramaTitle = searchParams.get('title') || videoTitleRef.current || '';
+        const titleParam = dramaTitle ? `&name=${encodeURIComponent(dramaTitle)}` : '';
+        const response = await fetch(`/api/shortdrama/detail?id=${shortdramaId}&episode=1${titleParam}`);
         if (response.ok) {
           const data = await response.json();
           setShortdramaDetails(data);
@@ -693,6 +751,88 @@ function PlayPageClient() {
     }
   };
 
+  // 处理演员点击事件
+  const handleCelebrityClick = async (celebrityName: string) => {
+    // 如果点击的是已选中的演员，则收起
+    if (selectedCelebrityName === celebrityName) {
+      setSelectedCelebrityName(null);
+      setCelebrityWorks([]);
+      return;
+    }
+
+    setSelectedCelebrityName(celebrityName);
+    setLoadingCelebrityWorks(true);
+    setCelebrityWorks([]);
+
+    try {
+      // 检查缓存
+      const cacheKey = `douban-celebrity-${celebrityName}`;
+      const cached = await ClientCache.get(cacheKey);
+
+      if (cached) {
+        console.log(`演员作品缓存命中: ${celebrityName}`);
+        setCelebrityWorks(cached);
+        setLoadingCelebrityWorks(false);
+        return;
+      }
+
+      console.log('搜索演员作品:', celebrityName);
+
+      // 使用豆瓣搜索API（通过cmliussss CDN）
+      const searchUrl = `https://movie.douban.cmliussss.net/j/search_subjects?type=movie&tag=${encodeURIComponent(celebrityName)}&sort=recommend&page_limit=20&page_start=0`;
+
+      const response = await fetch(searchUrl);
+      const data = await response.json();
+
+      if (data.subjects && data.subjects.length > 0) {
+        const works = data.subjects.map((item: any) => ({
+          id: item.id,
+          title: item.title,
+          poster: item.cover,
+          rate: item.rate,
+          year: item.url?.match(/\/subject\/(\d+)\//)?.[1] || '',
+          source: 'douban'
+        }));
+
+        // 保存到缓存（2小时）
+        await ClientCache.set(cacheKey, works, 2 * 60 * 60);
+
+        setCelebrityWorks(works);
+        console.log(`找到 ${works.length} 部 ${celebrityName} 的作品（豆瓣，已缓存）`);
+      } else {
+        // 豆瓣没有结果，尝试TMDB fallback
+        console.log('豆瓣未找到相关作品，尝试TMDB...');
+        try {
+          const tmdbResponse = await fetch(`/api/tmdb/actor?actor=${encodeURIComponent(celebrityName)}&type=movie&limit=20`);
+          const tmdbResult = await tmdbResponse.json();
+
+          if (tmdbResult.code === 200 && tmdbResult.list && tmdbResult.list.length > 0) {
+            // 给TMDB作品添加source标记
+            const worksWithSource = tmdbResult.list.map((work: any) => ({
+              ...work,
+              source: 'tmdb'
+            }));
+            // 保存到缓存（2小时）
+            await ClientCache.set(cacheKey, worksWithSource, 2 * 60 * 60);
+            setCelebrityWorks(worksWithSource);
+            console.log(`找到 ${tmdbResult.list.length} 部 ${celebrityName} 的作品（TMDB，已缓存）`);
+          } else {
+            console.log('TMDB也未找到相关作品');
+            setCelebrityWorks([]);
+          }
+        } catch (tmdbError) {
+          console.error('TMDB搜索失败:', tmdbError);
+          setCelebrityWorks([]);
+        }
+      }
+    } catch (error) {
+      console.error('获取演员作品出错:', error);
+      setCelebrityWorks([]);
+    } finally {
+      setLoadingCelebrityWorks(false);
+    }
+  };
+
   // 播放源优选函数（针对旧iPad做极端保守优化）
   const preferBestSource = async (
     sources: SearchResult[]
@@ -1017,8 +1157,10 @@ function PlayPageClient() {
     if (episodeData && episodeData.startsWith('shortdrama:')) {
       try {
         const [, videoId, episode] = episodeData.split(':');
+        // 添加剧名参数以支持备用API fallback
+        const nameParam = detailData.drama_name ? `&name=${encodeURIComponent(detailData.drama_name)}` : '';
         const response = await fetch(
-          `/api/shortdrama/parse?id=${videoId}&episode=${episode}`
+          `/api/shortdrama/parse?id=${videoId}&episode=${episode}${nameParam}`
         );
 
         if (response.ok) {
@@ -1618,8 +1760,12 @@ function PlayPageClient() {
 
         // 判断是否为短剧源
         if (source === 'shortdrama') {
+          // 传递 title 参数以支持备用API fallback
+          // 优先使用 URL 参数的 title，因为 videoTitleRef 可能还未初始化
+          const dramaTitle = searchParams.get('title') || videoTitleRef.current || '';
+          const titleParam = dramaTitle ? `&name=${encodeURIComponent(dramaTitle)}` : '';
           detailResponse = await fetch(
-            `/api/shortdrama/detail?id=${id}&episode=1`
+            `/api/shortdrama/detail?id=${id}&episode=1${titleParam}`
           );
         } else {
           detailResponse = await fetch(
@@ -2438,69 +2584,146 @@ function PlayPageClient() {
   // ---------------------------------------------------------------------------
   // 收藏相关
   // ---------------------------------------------------------------------------
-  // 每当 source 或 id 变化时检查收藏状态
+  // 每当 source 或 id 变化时检查收藏状态（支持豆瓣/Bangumi等虚拟源）
   useEffect(() => {
     if (!currentSource || !currentId) return;
     (async () => {
       try {
-        const fav = await isFavorited(currentSource, currentId);
+        const favorites = await getAllFavorites();
+
+        // 检查多个可能的收藏key
+        const possibleKeys = [
+          `${currentSource}+${currentId}`, // 当前真实播放源
+          videoDoubanId ? `douban+${videoDoubanId}` : null, // 豆瓣收藏
+          videoDoubanId ? `bangumi+${videoDoubanId}` : null, // Bangumi收藏
+          shortdramaId ? `shortdrama+${shortdramaId}` : null, // 短剧收藏
+        ].filter(Boolean);
+
+        // 检查是否任一key已被收藏
+        const fav = possibleKeys.some(key => !!favorites[key as string]);
         setFavorited(fav);
       } catch (err) {
         console.error('检查收藏状态失败:', err);
       }
     })();
-  }, [currentSource, currentId]);
+  }, [currentSource, currentId, videoDoubanId, shortdramaId]);
 
-  // 监听收藏数据更新事件
+  // 监听收藏数据更新事件（支持豆瓣/Bangumi等虚拟源）
   useEffect(() => {
     if (!currentSource || !currentId) return;
 
     const unsubscribe = subscribeToDataUpdates(
       'favoritesUpdated',
       (favorites: Record<string, any>) => {
-        const key = generateStorageKey(currentSource, currentId);
-        const isFav = !!favorites[key];
+        // 检查多个可能的收藏key
+        const possibleKeys = [
+          generateStorageKey(currentSource, currentId), // 当前真实播放源
+          videoDoubanId ? `douban+${videoDoubanId}` : null, // 豆瓣收藏
+          videoDoubanId ? `bangumi+${videoDoubanId}` : null, // Bangumi收藏
+          shortdramaId ? `shortdrama+${shortdramaId}` : null, // 短剧收藏
+        ].filter(Boolean);
+
+        // 检查是否任一key已被收藏
+        const isFav = possibleKeys.some(key => !!favorites[key as string]);
         setFavorited(isFav);
       }
     );
 
     return unsubscribe;
-  }, [currentSource, currentId]);
+  }, [currentSource, currentId, videoDoubanId, shortdramaId]);
 
-  // 自动更新收藏的集数信息（解决即将上映占位符数据问题）
+  // 自动更新收藏的集数和片源信息（支持豆瓣/Bangumi/短剧等虚拟源）
   useEffect(() => {
-    if (!detail || !favorited || !currentSource || !currentId) return;
+    if (!detail || !currentSource || !currentId) return;
 
-    const updateFavoriteEpisodes = async () => {
+    const updateFavoriteData = async () => {
       try {
         const realEpisodes = detail.episodes.length || 1;
-
-        // 获取当前收藏的数据
         const favorites = await getAllFavorites();
-        const key = `${currentSource}+${currentId}`;
-        const currentFavorite = favorites[key];
 
-        // 如果收藏的集数是占位符（99）或与真实集数不同，则更新
-        if (currentFavorite && (currentFavorite.total_episodes === 99 || currentFavorite.total_episodes !== realEpisodes)) {
-          console.log(`🔄 更新收藏集数: ${currentFavorite.total_episodes} → ${realEpisodes}`);
+        // 检查多个可能的收藏key
+        const possibleKeys = [
+          `${currentSource}+${currentId}`, // 当前真实播放源
+          videoDoubanId ? `douban+${videoDoubanId}` : null, // 豆瓣收藏
+          videoDoubanId ? `bangumi+${videoDoubanId}` : null, // Bangumi收藏
+        ].filter(Boolean);
 
-          await saveFavorite(currentSource, currentId, {
-            title: videoTitleRef.current || detail.title,
-            source_name: detail.source_name || currentFavorite.source_name || '',
-            year: detail.year || currentFavorite.year || '',
-            cover: detail.poster || currentFavorite.cover || '',
-            total_episodes: realEpisodes, // 更新为真实集数
-            save_time: currentFavorite.save_time || Date.now(), // 保持原收藏时间
-            search_title: currentFavorite.search_title || searchTitle,
+        let favoriteToUpdate = null;
+        let favoriteKey = '';
+
+        // 找到已存在的收藏
+        for (const key of possibleKeys) {
+          if (favorites[key as string]) {
+            favoriteToUpdate = favorites[key as string];
+            favoriteKey = key as string;
+            break;
+          }
+        }
+
+        if (!favoriteToUpdate) return;
+
+        // 检查是否需要更新（集数不同或缺少片源信息）
+        const needsUpdate =
+          favoriteToUpdate.total_episodes === 99 ||
+          favoriteToUpdate.total_episodes !== realEpisodes ||
+          !favoriteToUpdate.source_name ||
+          favoriteToUpdate.source_name === '即将上映' ||
+          favoriteToUpdate.source_name === '豆瓣' ||
+          favoriteToUpdate.source_name === 'Bangumi';
+
+        if (needsUpdate) {
+          console.log(`🔄 更新收藏数据: ${favoriteKey}`, {
+            旧集数: favoriteToUpdate.total_episodes,
+            新集数: realEpisodes,
+            旧片源: favoriteToUpdate.source_name,
+            新片源: detail.source_name,
           });
+
+          // 提取收藏key中的source和id
+          const [favSource, favId] = favoriteKey.split('+');
+
+          // 根据 type_name 推断内容类型
+          const inferType = (typeName?: string): string | undefined => {
+            if (!typeName) return undefined;
+            const lowerType = typeName.toLowerCase();
+            if (lowerType.includes('短剧') || lowerType.includes('shortdrama') || lowerType.includes('short-drama') || lowerType.includes('short drama')) return 'shortdrama';
+            if (lowerType.includes('综艺') || lowerType.includes('variety')) return 'variety';
+            if (lowerType.includes('电影') || lowerType.includes('movie')) return 'movie';
+            if (lowerType.includes('电视剧') || lowerType.includes('剧集') || lowerType.includes('tv') || lowerType.includes('series')) return 'tv';
+            if (lowerType.includes('动漫') || lowerType.includes('动画') || lowerType.includes('anime')) return 'anime';
+            if (lowerType.includes('纪录片') || lowerType.includes('documentary')) return 'documentary';
+            return undefined;
+          };
+
+          // 确定内容类型：优先使用已有的 type，如果没有则推断
+          let contentType = favoriteToUpdate.type || inferType(detail.type_name);
+          // 如果还是无法确定类型，检查 source 是否为 shortdrama
+          if (!contentType && favSource === 'shortdrama') {
+            contentType = 'shortdrama';
+          }
+
+          await saveFavorite(favSource, favId, {
+            title: videoTitleRef.current || detail.title || favoriteToUpdate.title,
+            source_name: detail.source_name || favoriteToUpdate.source_name || '',
+            year: detail.year || favoriteToUpdate.year || '',
+            cover: detail.poster || favoriteToUpdate.cover || '',
+            total_episodes: realEpisodes,
+            save_time: favoriteToUpdate.save_time || Date.now(),
+            search_title: favoriteToUpdate.search_title || searchTitle,
+            releaseDate: favoriteToUpdate.releaseDate,
+            remarks: favoriteToUpdate.remarks,
+            type: contentType,
+          });
+
+          console.log('✅ 收藏数据更新成功');
         }
       } catch (err) {
-        console.error('自动更新收藏集数失败:', err);
+        console.error('自动更新收藏数据失败:', err);
       }
     };
 
-    updateFavoriteEpisodes();
-  }, [detail, favorited, currentSource, currentId, searchTitle]);
+    updateFavoriteData();
+  }, [detail, currentSource, currentId, videoDoubanId, searchTitle]);
 
   // 切换收藏
   const handleToggleFavorite = async () => {
@@ -2518,6 +2741,26 @@ function PlayPageClient() {
         await deleteFavorite(currentSourceRef.current, currentIdRef.current);
         setFavorited(false);
       } else {
+        // 根据 type_name 推断内容类型
+        const inferType = (typeName?: string): string | undefined => {
+          if (!typeName) return undefined;
+          const lowerType = typeName.toLowerCase();
+          if (lowerType.includes('短剧') || lowerType.includes('shortdrama') || lowerType.includes('short-drama') || lowerType.includes('short drama')) return 'shortdrama';
+          if (lowerType.includes('综艺') || lowerType.includes('variety')) return 'variety';
+          if (lowerType.includes('电影') || lowerType.includes('movie')) return 'movie';
+          if (lowerType.includes('电视剧') || lowerType.includes('剧集') || lowerType.includes('tv') || lowerType.includes('series')) return 'tv';
+          if (lowerType.includes('动漫') || lowerType.includes('动画') || lowerType.includes('anime')) return 'anime';
+          if (lowerType.includes('纪录片') || lowerType.includes('documentary')) return 'documentary';
+          return undefined;
+        };
+
+        // 根据 source 或 type_name 确定内容类型
+        let contentType = inferType(detailRef.current?.type_name);
+        // 如果 type_name 无法推断类型，检查 source 是否为 shortdrama
+        if (!contentType && currentSourceRef.current === 'shortdrama') {
+          contentType = 'shortdrama';
+        }
+
         // 如果未收藏，添加收藏
         await saveFavorite(currentSourceRef.current, currentIdRef.current, {
           title: videoTitleRef.current,
@@ -2527,6 +2770,7 @@ function PlayPageClient() {
           total_episodes: detailRef.current?.episodes.length || 1,
           save_time: Date.now(),
           search_title: searchTitle,
+          type: contentType,
         });
         setFavorited(true);
       }
@@ -2725,7 +2969,7 @@ function PlayPageClient() {
         pip: true,
         autoSize: false,
         autoMini: false,
-        screenshot: false,
+        screenshot: !isMobile, // 桌面端启用截图功能
         setting: true,
         loop: false,
         flip: false,
@@ -2921,15 +3165,133 @@ function PlayPageClient() {
             switch: externalDanmuEnabled,
             onSwitch: function (item: any) {
               const nextState = !item.switch;
-              
+
               // 🚀 使用优化后的弹幕操作处理函数
               handleDanmuOperationOptimized(nextState);
-              
+
               // 更新tooltip显示
               item.tooltip = nextState ? '外部弹幕已开启' : '外部弹幕已关闭';
-              
+
               return nextState; // 立即返回新状态
             },
+          },
+          {
+            name: '弹幕设置',
+            html: '弹幕设置',
+            icon: '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>',
+            selector: (() => {
+              // 从 localStorage 读取保存的值
+              const savedFontSize = parseInt(localStorage.getItem('danmaku_fontSize') || '25');
+              const savedSpeed = parseFloat(localStorage.getItem('danmaku_speed') || '5');
+              const savedOpacity = parseFloat(localStorage.getItem('danmaku_opacity') || '0.8');
+              const savedMargin = JSON.parse(localStorage.getItem('danmaku_margin') || '[10, "75%"]');
+              const savedModes = JSON.parse(localStorage.getItem('danmaku_modes') || '[0, 1, 2]');
+
+              return [
+                {
+                  html: '字号',
+                  tooltip: '弹幕字号大小',
+                  selector: [
+                    { html: '12px', value: 12, default: savedFontSize === 12 },
+                    { html: '16px', value: 16, default: savedFontSize === 16 },
+                    { html: '20px', value: 20, default: savedFontSize === 20 },
+                    { html: '25px', value: 25, default: savedFontSize === 25 },
+                    { html: '30px', value: 30, default: savedFontSize === 30 },
+                    { html: '36px', value: 36, default: savedFontSize === 36 },
+                  ],
+                  onSelect: function (item: any) {
+                    localStorage.setItem('danmaku_fontSize', String(item.value));
+                    if (artPlayerRef.current?.plugins?.artplayerPluginDanmuku) {
+                      artPlayerRef.current.plugins.artplayerPluginDanmuku.config({
+                        fontSize: item.value,
+                      });
+                    }
+                    return item.html;
+                  },
+                },
+                {
+                  html: '速度',
+                  tooltip: '弹幕滚动速度',
+                  selector: [
+                    { html: '极慢', value: 10, default: savedSpeed === 10 },
+                    { html: '较慢', value: 7.5, default: savedSpeed === 7.5 },
+                    { html: '适中', value: 5, default: savedSpeed === 5 },
+                    { html: '较快', value: 2.5, default: savedSpeed === 2.5 },
+                    { html: '极快', value: 1, default: savedSpeed === 1 },
+                  ],
+                  onSelect: function (item: any) {
+                    localStorage.setItem('danmaku_speed', String(item.value));
+                    if (artPlayerRef.current?.plugins?.artplayerPluginDanmuku) {
+                      artPlayerRef.current.plugins.artplayerPluginDanmuku.config({
+                        speed: item.value,
+                      });
+                    }
+                    return item.html;
+                  },
+                },
+                {
+                  html: '透明度',
+                  tooltip: '弹幕透明度',
+                  selector: [
+                    { html: '30%', value: 0.3, default: savedOpacity === 0.3 },
+                    { html: '50%', value: 0.5, default: savedOpacity === 0.5 },
+                    { html: '70%', value: 0.7, default: savedOpacity === 0.7 },
+                    { html: '80%', value: 0.8, default: savedOpacity === 0.8 },
+                    { html: '100%', value: 1.0, default: savedOpacity === 1.0 },
+                  ],
+                  onSelect: function (item: any) {
+                    localStorage.setItem('danmaku_opacity', String(item.value));
+                    if (artPlayerRef.current?.plugins?.artplayerPluginDanmuku) {
+                      artPlayerRef.current.plugins.artplayerPluginDanmuku.config({
+                        opacity: item.value,
+                      });
+                    }
+                    return item.html;
+                  },
+                },
+                {
+                  html: '显示区域',
+                  tooltip: '弹幕显示区域',
+                  selector: [
+                    { html: '全屏显示', value: [10, 10], default: JSON.stringify(savedMargin) === JSON.stringify([10, 10]) },
+                    { html: '顶部区域', value: [10, '75%'], default: JSON.stringify(savedMargin) === JSON.stringify([10, '75%']) },
+                    { html: '上半部分', value: [10, '50%'], default: JSON.stringify(savedMargin) === JSON.stringify([10, '50%']) },
+                    { html: '下半部分', value: ['50%', 10], default: JSON.stringify(savedMargin) === JSON.stringify(['50%', 10]) },
+                    { html: '底部区域', value: ['75%', 10], default: JSON.stringify(savedMargin) === JSON.stringify(['75%', 10]) },
+                    { html: '仅中间', value: ['25%', '25%'], default: JSON.stringify(savedMargin) === JSON.stringify(['25%', '25%']) },
+                  ],
+                  onSelect: function (item: any) {
+                    localStorage.setItem('danmaku_margin', JSON.stringify(item.value));
+                    if (artPlayerRef.current?.plugins?.artplayerPluginDanmuku) {
+                      artPlayerRef.current.plugins.artplayerPluginDanmuku.config({
+                        margin: item.value,
+                      });
+                    }
+                    return item.html;
+                  },
+                },
+                {
+                  html: '弹幕类型',
+                  tooltip: '选择显示的弹幕类型',
+                  selector: [
+                    { html: '全部显示', value: [0, 1, 2], default: JSON.stringify(savedModes) === JSON.stringify([0, 1, 2]) },
+                    { html: '仅滚动', value: [0], default: JSON.stringify(savedModes) === JSON.stringify([0]) },
+                    { html: '滚动+顶部', value: [0, 1], default: JSON.stringify(savedModes) === JSON.stringify([0, 1]) },
+                    { html: '滚动+底部', value: [0, 2], default: JSON.stringify(savedModes) === JSON.stringify([0, 2]) },
+                    { html: '仅固定', value: [1, 2], default: JSON.stringify(savedModes) === JSON.stringify([1, 2]) },
+                  ],
+                  onSelect: function (item: any) {
+                    localStorage.setItem('danmaku_modes', JSON.stringify(item.value));
+                    if (artPlayerRef.current?.plugins?.artplayerPluginDanmuku) {
+                      artPlayerRef.current.plugins.artplayerPluginDanmuku.config({
+                        modes: item.value,
+                      });
+                    }
+                    return item.html;
+                  },
+                },
+              ];
+            })(),
           },
         ],
         // 控制栏配置
@@ -2990,7 +3352,7 @@ function PlayPageClient() {
             const getOptimizedConfig = () => {
               const baseConfig = {
                 danmuku: [], // 初始为空数组，后续通过load方法加载
-                speed: parseInt(localStorage.getItem('danmaku_speed') || '6'),
+                speed: parseFloat(localStorage.getItem('danmaku_speed') || '5'),
                 opacity: parseFloat(localStorage.getItem('danmaku_opacity') || '0.8'),
                 fontSize: parseInt(localStorage.getItem('danmaku_fontSize') || '25'),
                 color: '#FFFFFF',
@@ -3152,6 +3514,9 @@ function PlayPageClient() {
               }
             })
           ] : []),
+          // 毛玻璃效果控制栏插件 - 现代化悬浮设计
+          // CSS已优化：桌面98%宽度，移动端100%，按钮可自动缩小适应
+          artplayerPluginLiquidGlass()
         ],
       });
 
@@ -4670,15 +5035,412 @@ function PlayPageClient() {
               )}
 
               {/* 剧情简介 */}
-              {(shortdramaDetails?.desc || detail?.desc || bangumiDetails?.summary) && (
+              {(shortdramaDetails?.desc || detail?.desc || bangumiDetails?.summary || movieDetails?.plot_summary) && (
                 <div
                   className='mt-0 text-base leading-relaxed opacity-90 overflow-y-auto pr-2 flex-1 min-h-0 scrollbar-hide'
                   style={{ whiteSpace: 'pre-line' }}
                 >
-                  {shortdramaDetails?.desc || bangumiDetails?.summary || detail?.desc}
+                  {movieDetails?.plot_summary || shortdramaDetails?.desc || bangumiDetails?.summary || detail?.desc}
                 </div>
               )}
-              
+
+              {/* 短剧元数据（备用API提供） */}
+              {shortdramaDetails?.metadata && (
+                <div className='mt-4 space-y-3 border-t border-gray-200 dark:border-gray-700 pt-4'>
+                  {/* 评分 */}
+                  {shortdramaDetails.metadata.vote_average > 0 && (
+                    <div className='flex items-center gap-2'>
+                      <span className='text-yellow-500'>⭐</span>
+                      <span className='font-semibold text-gray-800 dark:text-gray-200'>
+                        {shortdramaDetails.metadata.vote_average.toFixed(1)}
+                      </span>
+                      <span className='text-sm text-gray-500 dark:text-gray-400'>/ 10</span>
+                    </div>
+                  )}
+                  {/* 演员 */}
+                  {shortdramaDetails.metadata.author && (
+                    <div className='flex items-start gap-2'>
+                      <span className='text-gray-600 dark:text-gray-400 flex-shrink-0'>🎭 演员:</span>
+                      <span className='text-gray-800 dark:text-gray-200'>
+                        {shortdramaDetails.metadata.author}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* 演员阵容 */}
+              {movieDetails?.celebrities && movieDetails.celebrities.length > 0 && (
+                <div className='mt-6 border-t border-gray-200 dark:border-gray-700 pt-6'>
+                  <h3 className='text-lg font-semibold text-gray-800 dark:text-gray-200 mb-4 flex items-center gap-2'>
+                    <span>🎭</span>
+                    <span>演员阵容</span>
+                  </h3>
+                  <div className='flex gap-4 overflow-x-auto pb-4 scrollbar-hide'>
+                    {movieDetails.celebrities.slice(0, 15).map((celebrity: any) => (
+                      <div
+                        key={celebrity.id}
+                        onClick={() => handleCelebrityClick(celebrity.name)}
+                        className='flex-shrink-0 text-center group cursor-pointer'
+                      >
+                        <div className='w-20 h-20 rounded-full overflow-hidden bg-gray-200 dark:bg-gray-700 mb-2 ring-2 ring-transparent group-hover:ring-blue-500 transition-all duration-300 group-hover:scale-110 shadow-md group-hover:shadow-xl'>
+                          <img
+                            src={processImageUrl(celebrity.avatar)}
+                            alt={celebrity.name}
+                            className='w-full h-full object-cover'
+                            loading='lazy'
+                            onError={(e) => {
+                              console.error('演员头像加载失败:', celebrity.name, celebrity.avatar, processImageUrl(celebrity.avatar));
+                              e.currentTarget.style.display = 'none';
+                            }}
+                          />
+                        </div>
+                        <p className='text-xs font-medium text-gray-700 dark:text-gray-300 w-20 truncate group-hover:text-blue-500 transition-colors' title={celebrity.name}>
+                          {celebrity.name}
+                        </p>
+                        {celebrity.role && (
+                          <p className='text-[10px] text-gray-500 dark:text-gray-500 w-20 truncate mt-0.5' title={celebrity.role}>
+                            {celebrity.role}
+                          </p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* 演员作品展示 */}
+              {selectedCelebrityName && (
+                <div className='mt-6 border-t border-gray-200 dark:border-gray-700 pt-6'>
+                  <div className='flex justify-between items-center mb-4'>
+                    <h3 className='text-lg font-semibold text-gray-800 dark:text-gray-200 flex items-center gap-2'>
+                      <span>🎬</span>
+                      <span>{selectedCelebrityName} 的作品</span>
+                    </h3>
+                    <button
+                      onClick={() => {
+                        setSelectedCelebrityName(null);
+                        setCelebrityWorks([]);
+                      }}
+                      className='text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
+                    >
+                      收起 ✕
+                    </button>
+                  </div>
+
+                  {loadingCelebrityWorks ? (
+                    <div className='flex flex-col items-center justify-center py-12'>
+                      <div className='animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mb-4'></div>
+                      <p className='text-gray-600 dark:text-gray-400'>正在加载作品...</p>
+                    </div>
+                  ) : celebrityWorks.length > 0 ? (
+                    <>
+                      <p className='text-sm text-gray-600 dark:text-gray-400 mb-4'>
+                        找到 {celebrityWorks.length} 部相关作品
+                      </p>
+                      <div className='grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4'>
+                        {celebrityWorks.map((work: any) => {
+                          // TMDB作品不传douban_id，仅传title搜索
+                          const playUrl = work.source === 'tmdb'
+                            ? `/play?title=${encodeURIComponent(work.title)}&prefer=true`
+                            : `/play?title=${encodeURIComponent(work.title)}&douban_id=${work.id}&prefer=true`;
+                          return (
+                            <div
+                              key={work.id}
+                              ref={(node) => {
+                                if (node) {
+                                  // 移除旧的监听器
+                                  const oldClick = (node as any)._clickHandler;
+                                  const oldTouchStart = (node as any)._touchStartHandler;
+                                  const oldTouchEnd = (node as any)._touchEndHandler;
+                                  if (oldClick) node.removeEventListener('click', oldClick, true);
+                                  if (oldTouchStart) node.removeEventListener('touchstart', oldTouchStart, true);
+                                  if (oldTouchEnd) node.removeEventListener('touchend', oldTouchEnd, true);
+
+                                  // 长按检测
+                                  let touchStartTime = 0;
+                                  let isLongPress = false;
+                                  let longPressTimer: NodeJS.Timeout | null = null;
+
+                                  const touchStartHandler = (e: Event) => {
+                                    touchStartTime = Date.now();
+                                    isLongPress = false;
+
+                                    // 设置长按定时器（500ms）
+                                    longPressTimer = setTimeout(() => {
+                                      isLongPress = true;
+                                    }, 500);
+                                  };
+
+                                  const touchEndHandler = (e: Event) => {
+                                    // 清除长按定时器
+                                    if (longPressTimer) {
+                                      clearTimeout(longPressTimer);
+                                      longPressTimer = null;
+                                    }
+
+                                    const touchDuration = Date.now() - touchStartTime;
+
+                                    // 如果是长按（超过500ms）或已标记为长按，不跳转
+                                    if (isLongPress || touchDuration >= 500) {
+                                      // 让 VideoCard 的长按菜单正常工作
+                                      return;
+                                    }
+
+                                    // 否则是短按，执行跳转
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    e.stopImmediatePropagation();
+                                    window.location.href = playUrl;
+                                  };
+
+                                  const clickHandler = (e: Event) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    e.stopImmediatePropagation();
+                                    window.location.href = playUrl;
+                                  };
+
+                                  node.addEventListener('touchstart', touchStartHandler, true);
+                                  node.addEventListener('touchend', touchEndHandler, true);
+                                  node.addEventListener('click', clickHandler, true);
+
+                                  // 保存引用以便清理
+                                  (node as any)._touchStartHandler = touchStartHandler;
+                                  (node as any)._touchEndHandler = touchEndHandler;
+                                  (node as any)._clickHandler = clickHandler;
+                                }
+                              }}
+                              style={{
+                                WebkitTapHighlightColor: 'transparent',
+                                touchAction: 'manipulation'
+                              }}
+                            >
+                              <VideoCard
+                                id={work.id}
+                                title={work.title}
+                                poster={work.poster}
+                                rate={work.rate}
+                                year={work.year}
+                                from='douban'
+                                douban_id={parseInt(work.id)}
+                              />
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </>
+                  ) : (
+                    <div className='text-center py-12'>
+                      <p className='text-gray-500 dark:text-gray-400 mb-2'>暂无相关作品</p>
+                      <p className='text-sm text-gray-400 dark:text-gray-500'>
+                        可能该演员的作品暂未收录
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* 推荐影片 */}
+              {movieDetails?.recommendations && movieDetails.recommendations.length > 0 && (
+                <div className='mt-6 border-t border-gray-200 dark:border-gray-700 pt-6'>
+                  <h3 className='text-lg font-semibold text-gray-800 dark:text-gray-200 mb-4 flex items-center gap-2'>
+                    <span>💡</span>
+                    <span>喜欢这部{movieDetails.episodes ? '剧' : '电影'}的人也喜欢</span>
+                  </h3>
+                  <div className='grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4'>
+                    {movieDetails.recommendations.map((item: any) => {
+                      const playUrl = `/play?title=${encodeURIComponent(item.title)}&douban_id=${item.id}&prefer=true`;
+                      return (
+                        <div
+                          key={item.id}
+                          ref={(node) => {
+                            if (node) {
+                              // 移除旧的监听器
+                              const oldClick = (node as any)._clickHandler;
+                              const oldTouchStart = (node as any)._touchStartHandler;
+                              const oldTouchEnd = (node as any)._touchEndHandler;
+                              if (oldClick) node.removeEventListener('click', oldClick, true);
+                              if (oldTouchStart) node.removeEventListener('touchstart', oldTouchStart, true);
+                              if (oldTouchEnd) node.removeEventListener('touchend', oldTouchEnd, true);
+
+                              // 长按检测
+                              let touchStartTime = 0;
+                              let isLongPress = false;
+                              let longPressTimer: NodeJS.Timeout | null = null;
+
+                              const touchStartHandler = (e: Event) => {
+                                touchStartTime = Date.now();
+                                isLongPress = false;
+
+                                // 设置长按定时器（500ms）
+                                longPressTimer = setTimeout(() => {
+                                  isLongPress = true;
+                                }, 500);
+                              };
+
+                              const touchEndHandler = (e: Event) => {
+                                // 清除长按定时器
+                                if (longPressTimer) {
+                                  clearTimeout(longPressTimer);
+                                  longPressTimer = null;
+                                }
+
+                                const touchDuration = Date.now() - touchStartTime;
+
+                                // 如果是长按（超过500ms）或已标记为长按，不跳转
+                                if (isLongPress || touchDuration >= 500) {
+                                  // 让 VideoCard 的长按菜单正常工作
+                                  return;
+                                }
+
+                                // 否则是短按，执行跳转
+                                e.preventDefault();
+                                e.stopPropagation();
+                                e.stopImmediatePropagation();
+                                window.location.href = playUrl;
+                              };
+
+                              const clickHandler = (e: Event) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                e.stopImmediatePropagation();
+                                window.location.href = playUrl;
+                              };
+
+                              node.addEventListener('touchstart', touchStartHandler, true);
+                              node.addEventListener('touchend', touchEndHandler, true);
+                              node.addEventListener('click', clickHandler, true);
+
+                              // 保存引用以便清理
+                              (node as any)._touchStartHandler = touchStartHandler;
+                              (node as any)._touchEndHandler = touchEndHandler;
+                              (node as any)._clickHandler = clickHandler;
+                            }
+                          }}
+                          style={{
+                            WebkitTapHighlightColor: 'transparent',
+                            touchAction: 'manipulation'
+                          }}
+                        >
+                          <VideoCard
+                            id={item.id}
+                            title={item.title}
+                            poster={item.poster}
+                            rate={item.rate}
+                            douban_id={parseInt(item.id)}
+                            from='douban'
+                            isAggregate={true}
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* 豆瓣短评 */}
+              {movieComments && movieComments.length > 0 && (
+                <div className='mt-6 border-t border-gray-200 dark:border-gray-700 pt-6'>
+                  <h3 className='text-lg font-semibold text-gray-800 dark:text-gray-200 mb-4 flex items-center gap-2'>
+                    <span>💬</span>
+                    <span>豆瓣短评</span>
+                  </h3>
+                  <div className='space-y-4'>
+                    {movieComments.slice(0, 10).map((comment: any, index: number) => (
+                      <div
+                        key={index}
+                        className='bg-gray-50 dark:bg-gray-800/50 rounded-lg p-4 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors'
+                      >
+                        <div className='flex items-start gap-3'>
+                          {/* 用户头像 */}
+                          <div className='flex-shrink-0'>
+                            {comment.avatar ? (
+                              <img
+                                src={comment.avatar}
+                                alt={comment.username}
+                                className='w-10 h-10 rounded-full object-cover'
+                                onError={(e) => {
+                                  e.currentTarget.style.display = 'none';
+                                }}
+                              />
+                            ) : (
+                              <div className='w-10 h-10 rounded-full bg-gray-300 dark:bg-gray-600 flex items-center justify-center text-gray-600 dark:text-gray-400'>
+                                {comment.username.charAt(0)}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* 短评内容 */}
+                          <div className='flex-1 min-w-0'>
+                            <div className='flex items-center gap-2 mb-1 flex-wrap'>
+                              <span className='font-medium text-gray-800 dark:text-gray-200'>
+                                {comment.username}
+                              </span>
+
+                              {/* 评分星级 */}
+                              {comment.rating > 0 && (
+                                <div className='flex items-center'>
+                                  {[...Array(5)].map((_, i) => (
+                                    <svg
+                                      key={i}
+                                      className={`w-3 h-3 ${
+                                        i < comment.rating
+                                          ? 'text-yellow-400'
+                                          : 'text-gray-300 dark:text-gray-600'
+                                      }`}
+                                      fill='currentColor'
+                                      viewBox='0 0 20 20'
+                                    >
+                                      <path d='M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z' />
+                                    </svg>
+                                  ))}
+                                </div>
+                              )}
+
+                              {/* 时间和地点 */}
+                              <span className='text-xs text-gray-500 dark:text-gray-400'>
+                                {comment.time}
+                                {comment.location && ` · ${comment.location}`}
+                              </span>
+                            </div>
+
+                            {/* 短评正文 */}
+                            <p className='text-sm text-gray-700 dark:text-gray-300 leading-relaxed whitespace-pre-wrap'>
+                              {comment.content}
+                            </p>
+
+                            {/* 有用数 */}
+                            {comment.useful_count > 0 && (
+                              <div className='mt-2 text-xs text-gray-500 dark:text-gray-400'>
+                                {comment.useful_count} 人认为有用
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* 查看更多链接 */}
+                  {videoDoubanId && (
+                    <div className='mt-4 text-center'>
+                      <a
+                        href={`https://movie.douban.com/subject/${videoDoubanId}/comments?status=P`}
+                        target='_blank'
+                        rel='noopener noreferrer'
+                        className='inline-flex items-center gap-1 text-sm text-blue-600 dark:text-blue-400 hover:underline'
+                      >
+                        查看更多短评
+                        <svg className='w-4 h-4' fill='none' stroke='currentColor' viewBox='0 0 24 24'>
+                          <path strokeLinecap='round' strokeLinejoin='round' strokeWidth={2} d='M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14' />
+                        </svg>
+                      </a>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* 网盘资源区域 */}
               <div id="netdisk-section" className='mt-6'>
                 <div className='border-t border-gray-200 dark:border-gray-700 pt-6'>
