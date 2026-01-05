@@ -88,6 +88,10 @@ export interface AdminConfig {
     model: string;                       // 模型名称
     temperature: number;                 // 温度参数 0-2
     maxTokens: number;                   // 最大token数
+    // 🔥 智能协调器（Orchestrator）配置
+    enableOrchestrator?: boolean;        // 是否启用智能协调器（意图分析+联网搜索）
+    enableWebSearch?: boolean;           // 是否启用联网搜索
+    tavilyApiKeys?: string[];            // Tavily API Keys（支持多个轮询，1000次/月免费）
   };
   YouTubeConfig?: {
     enabled: boolean;                    // 是否启用YouTube搜索功能
@@ -104,6 +108,14 @@ export interface AdminConfig {
     allowedIPs: string[];               // 允许的IP地址列表
     enableRateLimit: boolean;            // 是否启用频率限制
     rateLimit: number;                   // 每分钟允许的请求次数
+  };
+  TVBoxProxyConfig?: {
+    enabled: boolean;                    // 是否为TVBox启用Cloudflare Worker代理
+    proxyUrl: string;                    // Cloudflare Worker代理地址（例如：https://corsapi.smone.workers.dev）
+  };
+  VideoProxyConfig?: {
+    enabled: boolean;                    // 是否为普通视频源启用Cloudflare Worker代理
+    proxyUrl: string;                    // Cloudflare Worker代理地址（例如：https://corsapi.smone.workers.dev）
   };
   TelegramAuthConfig?: {
     enabled: boolean;                    // 是否启用Telegram登录
