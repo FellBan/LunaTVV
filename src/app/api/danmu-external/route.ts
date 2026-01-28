@@ -2,6 +2,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getRandomUserAgent, DEFAULT_USER_AGENT } from '@/lib/user-agent';
+import { recordRequest, getDbQueryCount, resetDbQueryCount } from '@/lib/performance-monitor';
 
 interface PlatformUrl {
   platform: string;
@@ -44,7 +45,7 @@ async function searchFromCaijiAPI(title: string, episode?: string | null): Promi
       const searchUrl = `https://www.caiji.cyou/api.php/provide/vod/?wd=${encodeURIComponent(searchTitle)}`;
       const response = await fetch(searchUrl, {
         headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'User-Agent': DEFAULT_USER_AGENT,
         },
       });
     
@@ -122,7 +123,7 @@ async function processSelectedResult(selectedResult: any, episode?: string | nul
     
     const detailResponse = await fetch(detailUrl, {
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'User-Agent': DEFAULT_USER_AGENT,
       },
     });
     
@@ -672,7 +673,7 @@ async function fetchDanmuFromAPI(videoUrl: string): Promise<DanmuItem[]> {
     const response = await fetch(apiUrl, {
       signal: controller.signal,
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'User-Agent': DEFAULT_USER_AGENT,
         'Accept': 'application/json, text/plain, */*',
         'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
         'Referer': 'https://danmu.icu/',
@@ -758,6 +759,10 @@ async function fetchDanmuFromAPI(videoUrl: string): Promise<DanmuItem[]> {
 }
 
 export async function GET(request: NextRequest) {
+  const startTime = Date.now();
+  const startMemory = process.memoryUsage().heapUsed;
+  resetDbQueryCount();
+
   const { searchParams } = new URL(request.url);
   const doubanId = searchParams.get('douban_id');
   const title = searchParams.get('title');
@@ -771,9 +776,24 @@ export async function GET(request: NextRequest) {
   console.log('集数:', episode);
 
   if (!doubanId && !title) {
-    return NextResponse.json({ 
-      error: 'Missing required parameters: douban_id or title' 
-    }, { status: 400 });
+    const errorResponse = {
+      error: 'Missing required parameters: douban_id or title'
+    };
+    const errorSize = Buffer.byteLength(JSON.stringify(errorResponse), 'utf8');
+
+    recordRequest({
+      timestamp: startTime,
+      method: 'GET',
+      path: '/api/danmu-external',
+      statusCode: 400,
+      duration: Date.now() - startTime,
+      memoryUsed: (process.memoryUsage().heapUsed - startMemory) / 1024 / 1024,
+      dbQueries: getDbQueryCount(),
+      requestSize: 0,
+      responseSize: errorSize,
+    });
+
+    return NextResponse.json(errorResponse, { status: 400 });
   }
 
   try {
@@ -802,13 +822,29 @@ export async function GET(request: NextRequest) {
     if (platformUrls.length === 0) {
       console.log('❌ 未找到任何视频平台链接，返回空弹幕结果');
       console.log('💡 建议: 检查标题是否正确，或者该内容可能暂不支持弹幕');
-      
-      return NextResponse.json({ 
+
+      const emptyResponse = {
         danmu: [],
         platforms: [],
         total: 0,
         message: `未找到"${title}"的视频平台链接，无法获取弹幕数据`
+      };
+      const responseSize = Buffer.byteLength(JSON.stringify(emptyResponse), 'utf8');
+
+      recordRequest({
+        timestamp: startTime,
+        method: 'GET',
+        path: '/api/danmu-external',
+        statusCode: 200,
+        duration: Date.now() - startTime,
+        memoryUsed: (process.memoryUsage().heapUsed - startMemory) / 1024 / 1024,
+        dbQueries: getDbQueryCount(),
+        requestSize: 0,
+        responseSize,
+        filter: `title:${title}|episode:${episode || 'none'}`,
       });
+
+      return NextResponse.json(emptyResponse);
     }
 
     // 并发获取多个平台的弹幕（使用XML API + JSON API备用）
@@ -885,17 +921,50 @@ export async function GET(request: NextRequest) {
 
     console.log(`🎯 弹幕去重优化: ${allDanmu.length} -> ${uniqueDanmu.length} 条`);
 
-    return NextResponse.json({
+    const successResponse = {
       danmu: uniqueDanmu,
       platforms: platformInfo,
       total: uniqueDanmu.length,
+    };
+    const responseSize = Buffer.byteLength(JSON.stringify(successResponse), 'utf8');
+
+    recordRequest({
+      timestamp: startTime,
+      method: 'GET',
+      path: '/api/danmu-external',
+      statusCode: 200,
+      duration: Date.now() - startTime,
+      memoryUsed: (process.memoryUsage().heapUsed - startMemory) / 1024 / 1024,
+      dbQueries: getDbQueryCount(),
+      requestSize: 0,
+      responseSize,
+      filter: `title:${title}|episode:${episode || 'none'}|danmu:${uniqueDanmu.length}`,
     });
+
+    return NextResponse.json(successResponse);
 
   } catch (error) {
     console.error('外部弹幕获取失败:', error);
-    return NextResponse.json({ 
+
+    const errorResponse = {
       error: '获取外部弹幕失败',
       danmu: []
-    }, { status: 500 });
+    };
+    const errorSize = Buffer.byteLength(JSON.stringify(errorResponse), 'utf8');
+
+    recordRequest({
+      timestamp: startTime,
+      method: 'GET',
+      path: '/api/danmu-external',
+      statusCode: 500,
+      duration: Date.now() - startTime,
+      memoryUsed: (process.memoryUsage().heapUsed - startMemory) / 1024 / 1024,
+      dbQueries: getDbQueryCount(),
+      requestSize: 0,
+      responseSize: errorSize,
+      filter: `title:${title}|episode:${episode || 'none'}`,
+    });
+
+    return NextResponse.json(errorResponse, { status: 500 });
   }
 }

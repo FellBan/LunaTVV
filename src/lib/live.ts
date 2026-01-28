@@ -7,6 +7,42 @@ import { db } from "@/lib/db";
 const defaultUA = 'AptvPlayer/1.4.10';
 const TVBOX_UA = 'okhttp/4.1.0';
 
+// 🚀 优化：超时控制
+const FETCH_TIMEOUT = 10000; // 10秒超时
+const EPG_CACHE_TTL = 24 * 60 * 60 * 1000; // EPG缓存24小时
+
+/**
+ * 带超时的 fetch 请求
+ */
+async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs: number = FETCH_TIMEOUT): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    return response;
+  } catch (error) {
+    clearTimeout(timeoutId);
+    if ((error as Error).name === 'AbortError') {
+      throw new Error(`请求超时 (${timeoutMs}ms): ${url}`);
+    }
+    throw error;
+  }
+}
+
+// 🚀 优化：EPG 缓存
+interface EpgCache {
+  epgs: { [key: string]: { start: string; end: string; title: string }[] };
+  logos: { [key: string]: string };
+  timestamp: number;
+}
+
+const epgCache = new Map<string, EpgCache>();
+
 export interface LiveChannels {
   channelNumber: number;
   channels: {
@@ -97,14 +133,14 @@ export async function refreshLiveChannels(liveInfo: {
   let content = '';
   
   try {
-    // 第一次 Fetch
+    // 第一次 Fetch - 使用超时控制
     console.log(`[Live] Fetching URL: ${liveInfo.url} with UA: ${isTvBox ? TVBOX_UA : ua}`);
-    const response = await fetch(liveInfo.url, {
+    const response = await fetchWithTimeout(liveInfo.url, {
       headers: {
         'User-Agent': isTvBox ? TVBOX_UA : ua,
       },
-    });
-    
+    }, FETCH_TIMEOUT);
+
     if (!response.ok) {
         console.error(`[Live] Failed to fetch live source: ${response.status} ${response.statusText}`);
         return 0;
@@ -431,11 +467,18 @@ async function parseEpg(
     }[]
   };
   logos: {
-    [key: string]: string; 
+    [key: string]: string;
   };
 }> {
   if (!epgUrl) {
     return { epgs: {}, logos: {} };
+  }
+
+  // 🚀 优化：检查缓存
+  const cached = epgCache.get(epgUrl);
+  if (cached && (Date.now() - cached.timestamp) < EPG_CACHE_TTL) {
+    console.log(`[Live] Using cached EPG for ${epgUrl} (age: ${Math.round((Date.now() - cached.timestamp) / 1000 / 60)}min)`);
+    return { epgs: cached.epgs, logos: cached.logos };
   }
 
   const tvgs = new Set(tvgIds);
@@ -449,10 +492,16 @@ async function parseEpg(
   const epgChannelIdToLogo = new Map<string, string>();
 
   try {
-    const response = await fetch(epgUrl, {
+    // 🚀 优化：使用超时控制
+    console.log(`[Live] Fetching EPG from ${epgUrl} with ${FETCH_TIMEOUT}ms timeout...`);
+    const response = await fetchWithTimeout(epgUrl, {
       headers: { 'User-Agent': ua },
-    });
-    if (!response.ok) return { epgs: {}, logos: {} };
+    }, FETCH_TIMEOUT);
+
+    if (!response.ok) {
+      console.warn(`[Live] EPG fetch failed: ${response.status}, skipping EPG`);
+      return { epgs: {}, logos: {} };
+    }
 
     const reader = response.body?.getReader();
     if (!reader) return { epgs: {}, logos: {} };
@@ -460,24 +509,31 @@ async function parseEpg(
     const decoder = new TextDecoder();
     let buffer = '';
     let currentChannelId = '';
+    let inChannelTag = false;
     let currentProgram: { start: string; end: string; title: string } | null = null;
     let currentEpgChannelId = '';
-    
-    // Streaming parser logic - REIMPLEMENTED FROM ORIGINAL READ
+
+    // Streaming parser logic - Support both single-line and multi-line XML formats
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-      
+
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
       buffer = lines.pop() || '';
 
       for (const line of lines) {
         const trimmed = line.trim();
+
+        // Handle <channel> tag - support multi-line format
         if (trimmed.startsWith('<channel')) {
            const idMatch = trimmed.match(/id="([^"]*)"/);
-           if (idMatch) currentChannelId = idMatch[1];
-           
+           if (idMatch) {
+               currentChannelId = idMatch[1];
+               inChannelTag = true;
+           }
+
+           // Check if display-name is on the same line (single-line format)
            const nameMatch = trimmed.match(/<display-name[^>]*>(.*?)<\/display-name>/);
            if (currentChannelId && nameMatch) {
                epgNameToChannelId.set(normalizeChannelName(nameMatch[1]), currentChannelId);
@@ -486,7 +542,33 @@ async function parseEpg(
            if (currentChannelId && iconMatch) {
                epgChannelIdToLogo.set(currentChannelId, iconMatch[1]);
            }
+
+           // Check if it's a self-closing or closing on same line
+           if (trimmed.includes('</channel>')) {
+               inChannelTag = false;
+               currentChannelId = '';
+           }
         }
+        // Handle display-name in multi-line format (when inside channel tag)
+        else if (inChannelTag && trimmed.startsWith('<display-name')) {
+           const nameMatch = trimmed.match(/<display-name[^>]*>(.*?)<\/display-name>/);
+           if (currentChannelId && nameMatch) {
+               epgNameToChannelId.set(normalizeChannelName(nameMatch[1]), currentChannelId);
+           }
+        }
+        // Handle icon in multi-line format (when inside channel tag)
+        else if (inChannelTag && trimmed.startsWith('<icon')) {
+           const iconMatch = trimmed.match(/<icon\s+src="([^"]*)"/);
+           if (currentChannelId && iconMatch) {
+               epgChannelIdToLogo.set(currentChannelId, iconMatch[1]);
+           }
+        }
+        // Handle closing </channel> tag
+        else if (trimmed.startsWith('</channel>')) {
+           inChannelTag = false;
+           currentChannelId = '';
+        }
+        // Handle <programme> tag
         else if (trimmed.startsWith('<programme')) {
              const channelIdMatch = trimmed.match(/channel="([^"]*)"/);
              const epgChannelId = channelIdMatch ? channelIdMatch[1] : '';
@@ -495,6 +577,7 @@ async function parseEpg(
              if (epgChannelId && startMatch && endMatch) {
                  currentProgram = { start: startMatch[1], end: endMatch[1], title: '' };
                  currentEpgChannelId = epgChannelId;
+                 // Check if title is on the same line (single-line format)
                  const titleMatch = trimmed.match(/<title(?:\s+[^>]*)?>(.*?)<\/title>/);
                  if (titleMatch) {
                      currentProgram.title = titleMatch[1];
@@ -504,6 +587,7 @@ async function parseEpg(
                  }
              }
         }
+        // Handle <title> tag in multi-line format (when inside programme tag)
         else if (trimmed.startsWith('<title') && currentProgram) {
              const titleMatch = trimmed.match(/<title(?:\s+[^>]*)?>(.*?)<\/title>/);
              if (titleMatch) {
@@ -516,7 +600,15 @@ async function parseEpg(
       }
     }
   } catch (e) {
-      // ignore
+      // 🚀 优化：超时或错误时优雅降级
+      const error = e as Error;
+      if (error.message?.includes('请求超时')) {
+        console.warn(`[Live] EPG fetch timeout (${FETCH_TIMEOUT}ms), skipping EPG: ${epgUrl}`);
+      } else {
+        console.warn(`[Live] EPG parsing error, skipping EPG: ${error.message}`);
+      }
+      // 返回空 EPG，不影响直播源正常使用
+      return { epgs: {}, logos: {} };
   }
 
   // Map back to M3U channels
@@ -539,7 +631,15 @@ async function parseEpg(
       }
     }
   }
-  
+
+  // 🚀 优化：保存到缓存
+  epgCache.set(epgUrl, {
+    epgs: result,
+    logos,
+    timestamp: Date.now()
+  });
+  console.log(`[Live] EPG cached for ${epgUrl} (TTL: 24h)`);
+
   return { epgs: result, logos };
 }
 
